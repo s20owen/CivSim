@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Early Civ</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-shell">
+        <aside id="thought-rail" class="rail-panel overlay-panel info-box">
+            <div class="panel-header">
+                <h2>Thoughts</h2>
+                <button class="panel-toggle" data-target="thought-rail" aria-expanded="true">-</button>
+            </div>
+            <div class="panel-body">
+                <ul id="thought-feed">
+                    <li>Waiting for the colony to wake up.</li>
+                </ul>
+            </div>
+        </aside>
+
+        <div id="game-container">
+            <header id="top-bar">
+                <h1>Early Civ Sim</h1>
+                <div id="global-stats">
+                    <span>Generation: <span id="current-generation">0</span></span>
+                    <span>Year: <span id="current-year">1</span></span>
+                    <span>Season: <span id="current-season">Spring</span></span>
+                    <span>Weather: <span id="current-weather">Clear</span></span>
+                    <span>Era: <span id="current-era">Survivalist</span></span>
+                    <span>Population: <span id="total-population">0</span></span>
+                </div>
+                <div id="time-controls" aria-label="Simulation speed">
+                    <button class="time-button is-active" data-speed="1">1x</button>
+                    <button class="time-button" data-speed="2">2x</button>
+                    <button class="time-button" data-speed="4">4x</button>
+                    <button class="time-button" data-speed="8">8x</button>
+                </div>
+            </header>
+            <section id="need-bar" class="overlay-panel">
+                <div class="need-item">
+                    <span class="need-label">Food</span>
+                    <div class="need-track">
+                        <div id="need-food" class="need-fill need-food"></div>
+                        <span id="need-food-value" class="need-value">0%</span>
+                    </div>
+                </div>
+                <div class="need-item">
+                    <span class="need-label">Build</span>
+                    <div class="need-track">
+                        <div id="need-build" class="need-fill need-build"></div>
+                        <span id="need-build-value" class="need-value">0%</span>
+                    </div>
+                </div>
+                <div class="need-item">
+                    <span class="need-label">Care</span>
+                    <div class="need-track">
+                        <div id="need-care" class="need-fill need-care"></div>
+                        <span id="need-care-value" class="need-value">0%</span>
+                    </div>
+                </div>
+                <div class="need-item">
+                    <span class="need-label">Defense</span>
+                    <div class="need-track">
+                        <div id="need-defense" class="need-fill need-defense"></div>
+                        <span id="need-defense-value" class="need-value">0%</span>
+                    </div>
+                </div>
+                <div id="need-order">Current order: steady work</div>
+            </section>
+
+            <main id="playfield">
+                <div id="canvas-container">
+                    <canvas id="game-canvas"></canvas>
+
+                    <aside id="sidebar" class="overlay-panel is-collapsed">
+                        <div class="panel-header">
+                            <h2>God Mode</h2>
+                            <button class="panel-toggle" data-target="sidebar" aria-expanded="false">+</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="god-launch-row">
+                                <button id="btn-god-mode" class="game-button">Pause / Resume</button>
+                                <button id="btn-god-focus" class="game-button">Focus View</button>
+                            </div>
+                            <div class="god-mode-tabs" role="tablist" aria-label="God mode sections">
+                                <button class="god-tab is-active" data-god-tab="powers" role="tab" aria-selected="true">Powers</button>
+                                <button class="god-tab" data-god-tab="inspect" role="tab" aria-selected="false">Inspect</button>
+                                <button class="god-tab" data-god-tab="influence" role="tab" aria-selected="false">Influence</button>
+                                <button class="god-tab" data-god-tab="world" role="tab" aria-selected="false">World</button>
+                            </div>
+
+                            <section class="god-tab-panel is-active" data-god-panel="powers" role="tabpanel">
+                                <div class="god-section">
+                                    <h3>Direct Powers</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-spawn-food" class="game-button">Spawn Food</button>
+                                        <button id="btn-spawn-water" class="game-button">Spawn Water</button>
+                                        <button id="btn-bless-harvest" class="game-button">Bless Harvest</button>
+                                        <button id="btn-lightning-strike" class="game-button">Lightning</button>
+                                        <button id="btn-kill-creature" class="game-button">Instill Fear</button>
+                                        <button id="btn-kill-unit" class="game-button">Kill Unit</button>
+                                        <button id="btn-infect-creature" class="game-button">Spread Sickness</button>
+                                        <button id="btn-heal-creature" class="game-button">Heal</button>
+                                        <button id="btn-cure-disease" class="game-button">Disease Cure</button>
+                                        <button id="btn-disease-outbreak" class="game-button">Outbreak</button>
+                                        <button id="btn-inspire-learning" class="game-button">Inspire Learning</button>
+                                        <button id="btn-calm-conflict" class="game-button">Calm Conflict</button>
+                                        <button id="btn-incite-war" class="game-button">Incite War</button>
+                                        <button id="btn-spawn-predator" class="game-button">Spawn Predator</button>
+                                        <button id="btn-create-relic" class="game-button">Create Relic</button>
+                                        <button id="btn-terraform-land" class="game-button">Terraform</button>
+                                        <button id="btn-protect-bubble" class="game-button">Protect Bubble</button>
+                                        <button id="btn-toggle-storm" class="game-button">Spawn Storm</button>
+                                        <button id="btn-weather-sun" class="game-button">Sunshine</button>
+                                        <button id="btn-weather-rain" class="game-button">Rain</button>
+                                        <button id="btn-weather-fog" class="game-button">Fog</button>
+                                        <button id="btn-weather-cloudy" class="game-button">Cloudy</button>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="god-tab-panel" data-god-panel="inspect" role="tabpanel" hidden>
+                                <div class="god-section">
+                                    <h3>Selection</h3>
+                                    <pre id="god-inspect-selection" class="god-inspect-block">No selection.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Memory</h3>
+                                    <pre id="god-inspect-memory" class="god-inspect-block">No memory data yet.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Decision Trace</h3>
+                                    <pre id="god-inspect-thoughts" class="god-inspect-block">No thought trace yet.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Lineage</h3>
+                                    <pre id="god-inspect-lineage" class="god-inspect-block">No lineage notes yet.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Culture</h3>
+                                    <pre id="god-inspect-culture" class="god-inspect-block">No culture summary yet.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Battle Readiness</h3>
+                                    <pre id="god-inspect-battle" class="god-inspect-block">No battle summary yet.</pre>
+                                </div>
+                            </section>
+
+                            <section class="god-tab-panel" data-god-panel="influence" role="tabpanel" hidden>
+                                <div class="god-section">
+                                    <h3>Mythic Influence</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-omen-food" class="game-button">Dream of Plenty</button>
+                                        <button id="btn-omen-water" class="game-button">Dream of Water</button>
+                                        <button id="btn-omen-defense" class="game-button">War Omen</button>
+                                        <button id="btn-omen-build" class="game-button">Builder's Sign</button>
+                                        <button id="btn-omen-peace" class="game-button">Peace Omen</button>
+                                        <button id="btn-omen-expansion" class="game-button">Expansion Omen</button>
+                                    </div>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Current Divine Pressure</h3>
+                                    <pre id="god-influence-summary" class="god-inspect-block">No omen is active.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Myths</h3>
+                                    <pre id="god-influence-myths" class="god-inspect-block">No myths yet.</pre>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Save Control</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-save-run" class="game-button">Save Run</button>
+                                        <button id="btn-load-run" class="game-button">Load Run</button>
+                                        <button id="btn-clear-local-save" class="game-button">Clear Local Saves</button>
+                                    </div>
+                                    <pre id="save-status" class="god-inspect-block">No saved run.</pre>
+                                </div>
+                            </section>
+
+                            <section class="god-tab-panel" data-god-panel="world" role="tabpanel" hidden>
+                                <div class="god-section">
+                                    <h3>World Controls</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-season-slower" class="game-button">Slower Seasons</button>
+                                        <button id="btn-season-faster" class="game-button">Faster Seasons</button>
+                                        <button id="btn-weather-softer" class="game-button">Softer Weather</button>
+                                        <button id="btn-weather-harsher" class="game-button">Harsher Weather</button>
+                                        <button id="btn-abundance-lower" class="game-button">Less Abundance</button>
+                                        <button id="btn-abundance-higher" class="game-button">More Abundance</button>
+                                        <button id="btn-disease-lower" class="game-button">Lower Disease</button>
+                                        <button id="btn-disease-higher" class="game-button">Higher Disease</button>
+                                        <button id="btn-learning-slower" class="game-button">Slower Learning</button>
+                                        <button id="btn-learning-faster" class="game-button">Faster Learning</button>
+                                        <button id="btn-disaster-lower" class="game-button">Lower Disasters</button>
+                                        <button id="btn-disaster-higher" class="game-button">Higher Disasters</button>
+                                        <button id="btn-place-daughter" class="game-button">Place Daughter</button>
+                                        <button id="btn-place-rival" class="game-button">Place Rival</button>
+                                    </div>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Terrain Paint</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-paint-grassland" class="game-button">Paint Grassland</button>
+                                        <button id="btn-paint-forest" class="game-button">Paint Forest</button>
+                                        <button id="btn-paint-rocky" class="game-button">Paint Rocky</button>
+                                        <button id="btn-paint-water" class="game-button">Paint Water</button>
+                                        <button id="btn-paint-fertile" class="game-button">Paint Fertile</button>
+                                    </div>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Starting Era</h3>
+                                    <div class="god-button-grid">
+                                        <button id="btn-era-survival" class="game-button">Era Survival</button>
+                                        <button id="btn-era-toolmaking" class="game-button">Era Toolmaking</button>
+                                        <button id="btn-era-agriculture" class="game-button">Era Agriculture</button>
+                                        <button id="btn-era-masonry" class="game-button">Era Masonry</button>
+                                        <button id="btn-era-engineering" class="game-button">Era Engineering</button>
+                                        <button id="btn-era-metallurgy" class="game-button">Era Metallurgy</button>
+                                        <button id="btn-era-bronze" class="game-button">Era Bronze Age</button>
+                                        <button id="btn-era-iron" class="game-button">Era Iron Age</button>
+                                    </div>
+                                </div>
+                                <div class="god-section">
+                                    <h3>Current World</h3>
+                                    <pre id="god-world-summary" class="god-inspect-block">World summary unavailable.</pre>
+                                </div>
+                            </section>
+                        </div>
+                    </aside>
+
+                    <aside id="dev-panel" class="overlay-panel is-collapsed">
+                        <div class="panel-header">
+                            <h2>Dev Tools</h2>
+                            <button class="panel-toggle" data-target="dev-panel" aria-expanded="false">+</button>
+                        </div>
+                        <div class="panel-body">
+                            <div class="dev-actions">
+                                <button id="btn-dev-toggle" class="game-button">Debug: Off</button>
+                                <button id="btn-dev-copy" class="game-button">Copy Dump</button>
+                            </div>
+                            <div class="dev-block">
+                                <h3>Colony</h3>
+                                <pre id="dev-colony-output">Debug disabled.</pre>
+                            </div>
+                            <div class="dev-block">
+                                <h3>Selection</h3>
+                                <pre id="dev-throng-output">No selection.</pre>
+                            </div>
+                            <div class="dev-block">
+                                <h3>Recent Trace</h3>
+                                <pre id="dev-log-output">No trace yet.</pre>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <aside id="zoom-panel" class="overlay-panel" aria-label="Zoom controls">
+                        <div class="panel-header">
+                            <h2>Zoom</h2>
+                        </div>
+                        <div class="panel-body">
+                            <div class="zoom-button-stack">
+                                <button id="btn-zoom-in" class="game-button" type="button">+</button>
+                                <button id="btn-zoom-out" class="game-button" type="button">-</button>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <section id="storage-banner" class="overlay-panel">
+                        <div class="panel-header">
+                            <h2>Colony Storage</h2>
+                            <button class="panel-toggle" data-target="storage-banner" aria-expanded="true">-</button>
+                        </div>
+                        <div class="panel-body">
+                            <div id="storage-value">0</div>
+                        </div>
+                    </section>
+
+                    <section id="battle-panel" class="overlay-panel is-hidden">
+                        <div class="panel-header">
+                            <h2 id="battle-title">Battlefield</h2>
+                            <button class="panel-toggle" data-target="battle-panel" aria-expanded="true">-</button>
+                        </div>
+                        <div class="panel-body">
+                            <p id="battle-meta">No active battles.</p>
+                            <ul id="battle-summary"></ul>
+                        </div>
+                    </section>
+
+                    <div id="bottom-panel">
+                        <section id="stats-panel" class="info-box overlay-panel is-hidden">
+                            <div class="panel-header">
+                                <h2 id="selection-title">Selection</h2>
+                                <button class="panel-toggle" data-target="stats-panel" aria-expanded="true">-</button>
+                            </div>
+                            <div id="stats-content" class="panel-body">
+                                <div class="stat-row">
+                                    <span id="stat-label-a">Energy: <span id="stat-energy">-</span></span>
+                                    <span id="stat-label-b">Hunger: <span id="stat-hunger">-</span></span>
+                                </div>
+                                <div class="stat-row">
+                                    <span id="stat-label-c">Fun: <span id="stat-fun">-</span></span>
+                                    <span id="stat-label-d">Age: <span id="stat-age">-</span></span>
+                                </div>
+                                <div class="stat-row">
+                                    <span id="stat-label-e">Trait: <span id="stat-trait">-</span></span>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <section id="report-modal" class="overlay-panel" data-open="false" aria-live="polite">
+                        <div class="panel-header">
+                            <h2 id="report-title">Milestone</h2>
+                            <button id="report-close" class="panel-toggle" aria-label="Close report">x</button>
+                        </div>
+                        <div class="panel-body">
+                            <p id="report-meta"></p>
+                            <ul id="report-list"></ul>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+
+        <aside id="log-panel" class="rail-panel overlay-panel info-box">
+            <div class="panel-header">
+                <h2>Event Log</h2>
+                <button class="panel-toggle" data-target="log-panel" aria-expanded="true">-</button>
+            </div>
+            <div class="panel-body">
+                <ul id="event-log">
+                    <li>Simulation initialized.</li>
+                </ul>
+            </div>
+        </aside>
+    </div>
+    
+    <!-- Phase 1 rewrite -->
+    <script src="js/phase1/core.js"></script>
+    <script src="js/phase1/battle.js"></script>
+    <script src="js/phase1/renderer.js"></script>
+    <script src="js/phase1/ui.js"></script>
+    <script src="js/phase1/main.js"></script>
+</body>
+</html>
