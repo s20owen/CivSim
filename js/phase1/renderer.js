@@ -2,6 +2,19 @@
     const PhaseOneSim = window.PhaseOneSim || (window.PhaseOneSim = {});
     const { WORLD_WIDTH, WORLD_HEIGHT, CELL_WIDTH, CELL_HEIGHT, BIOME_COLORS } = PhaseOneSim.constants;
     const { clamp, distance } = PhaseOneSim;
+    const STRUCTURE_SPRITE_CONFIG = {
+        src: 'crop_hut.png',
+        frameWidth: 128,
+        frameHeight: 128,
+        drawWidth: 128,
+        drawHeight: 128,
+        roofSourceY: 648,
+        frames: {
+            crop: [0, 1, 2, 3],
+            hutBase: 4,
+            hutRoof: 5
+        }
+    };
     const COLONIST_SPRITE_CONFIG = {
         src: 'character-spritesheet.png',
         frameWidth: 64,
@@ -69,14 +82,31 @@
             this.baseScale = 1;
             this.zoom = 1.7;
             this.minZoom = 1;
-            this.maxZoom = 2.8;
+            this.maxZoom = 5;
             this.cameraX = world.camp.x;
             this.cameraY = world.camp.y;
+            this.structureSprite = null;
+            this.structureSpriteReady = false;
             this.colonistSprite = null;
             this.colonistSpriteReady = false;
             this.colonistSpriteState = new Map();
+            this.loadStructureSprite();
             this.loadColonistSprite();
             this.resize();
+        }
+
+        loadStructureSprite() {
+            const sprite = new Image();
+            sprite.onload = () => {
+                this.structureSprite = sprite;
+                this.structureSpriteReady = true;
+                this.render();
+            };
+            sprite.onerror = () => {
+                this.structureSprite = null;
+                this.structureSpriteReady = false;
+            };
+            sprite.src = STRUCTURE_SPRITE_CONFIG.src;
         }
 
         loadColonistSprite() {
@@ -322,23 +352,6 @@
                 ctx.moveTo(building.x, building.y - 10);
                 ctx.lineTo(building.x, building.y - 18);
                 ctx.stroke();
-            } else if (building.type === 'farmPlot' || building.type === 'engineeredFarm') {
-                const cropColor = era === 'survival' || era === 'toolmaking'
-                    ? '#8fae52'
-                    : era === 'agriculture'
-                        ? '#c2bf67'
-                        : era === 'masonry'
-                            ? '#d2c46e'
-                            : '#d4d9b0';
-                ctx.strokeStyle = cropColor;
-                ctx.lineWidth = 1;
-                for (let i = -1; i <= 1; i += 1) {
-                    ctx.beginPath();
-                    ctx.moveTo(building.x + i * 6, building.y + 6);
-                    ctx.lineTo(building.x + i * 6, building.y - 4);
-                    ctx.lineTo(building.x + i * 6 + 2, building.y - 8);
-                    ctx.stroke();
-                }
             } else if (building.type === 'mill') {
                 ctx.fillStyle = era === 'engineering' || era === 'metallurgy'
                     ? '#dadfd5'
@@ -400,10 +413,12 @@
             this.drawTerrain(ctx);
             this.drawEraBackdrop(ctx);
             this.drawLandUse(ctx);
+            this.drawGroundStructures(ctx);
             this.drawResources(ctx);
             this.drawSettlement(ctx);
             this.drawCamp(ctx);
             this.drawColonists(ctx);
+            this.drawBuildingRoofOverlays(ctx);
             this.drawWeather(ctx);
             this.drawLighting(ctx);
             ctx.restore();
@@ -1074,6 +1089,18 @@
                 this.drawProject(ctx, project);
             }
             for (const building of this.world.buildings) {
+                if (building.type === 'farmPlot' || building.type === 'engineeredFarm') {
+                    continue;
+                }
+                this.drawBuilding(ctx, building);
+            }
+        }
+
+        drawGroundStructures(ctx) {
+            for (const building of this.world.buildings) {
+                if (building.type !== 'farmPlot' && building.type !== 'engineeredFarm') {
+                    continue;
+                }
                 this.drawBuilding(ctx, building);
             }
         }
@@ -1424,10 +1451,15 @@
                 ctx.closePath();
                 ctx.fill();
             } else if (building.type === 'hut') {
-                ctx.fillStyle = palette.wood;
-                ctx.fillRect(building.x - 13, building.y - 10, 26, 20);
-                ctx.fillStyle = palette.roof;
-                ctx.fillRect(building.x - 15, building.y - 14, 30, 8);
+                if (!this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutBase, {
+                    drawWidth: CELL_WIDTH * 2,
+                    drawHeight: CELL_HEIGHT * 2
+                })) {
+                    ctx.fillStyle = palette.wood;
+                    ctx.fillRect(building.x - 13, building.y - 10, 26, 20);
+                    ctx.fillStyle = palette.roof;
+                    ctx.fillRect(building.x - 15, building.y - 14, 30, 8);
+                }
             } else if (building.type === 'cottage') {
                 ctx.fillStyle = era === 'masonry' || era === 'engineering' || era === 'metallurgy' || era === 'bronze age' || era === 'iron age' ? '#9a8876' : palette.wood;
                 ctx.fillRect(building.x - 15, building.y - 11, 30, 22);
@@ -1533,22 +1565,42 @@
                 ctx.lineWidth = 1.3;
                 ctx.strokeRect(building.x - 22, building.y - 12, 44, 24);
             } else if (building.type === 'farmPlot') {
-                ctx.fillStyle = '#755631';
-                ctx.fillRect(building.x - 14, building.y - 10, 28, 20);
-                ctx.strokeStyle = palette.field;
-                ctx.lineWidth = 1.4;
-                ctx.strokeRect(building.x - 14, building.y - 10, 28, 20);
-                ctx.fillStyle = palette.field;
-                ctx.fillRect(building.x - 10, building.y - 6, 20, 12);
+                const cropFrame = this.getCropStructureFrame(building);
+                const rect = this.getAlignedCropRect(building);
+                if (!this.drawStructureSprite(ctx, building, cropFrame, {
+                    anchor: 'topLeft',
+                    x: rect.x,
+                    y: rect.y,
+                    drawWidth: rect.width,
+                    drawHeight: rect.height
+                })) {
+                    ctx.fillStyle = '#755631';
+                    ctx.fillRect(building.x - 14, building.y - 10, 28, 20);
+                    ctx.strokeStyle = palette.field;
+                    ctx.lineWidth = 1.4;
+                    ctx.strokeRect(building.x - 14, building.y - 10, 28, 20);
+                    ctx.fillStyle = palette.field;
+                    ctx.fillRect(building.x - 10, building.y - 6, 20, 12);
+                }
             } else if (building.type === 'engineeredFarm') {
-                ctx.fillStyle = '#6d5530';
-                ctx.fillRect(building.x - 16, building.y - 11, 32, 22);
-                ctx.strokeStyle = palette.field;
-                ctx.lineWidth = 1.5;
-                ctx.strokeRect(building.x - 16, building.y - 11, 32, 22);
-                ctx.fillStyle = palette.field;
-                ctx.fillRect(building.x - 12, building.y - 7, 24, 5);
-                ctx.fillRect(building.x - 12, building.y + 1, 24, 5);
+                const cropFrame = this.getCropStructureFrame(building);
+                const rect = this.getAlignedCropRect(building);
+                if (!this.drawStructureSprite(ctx, building, cropFrame, {
+                    anchor: 'topLeft',
+                    x: rect.x,
+                    y: rect.y,
+                    drawWidth: rect.width,
+                    drawHeight: rect.height
+                })) {
+                    ctx.fillStyle = '#6d5530';
+                    ctx.fillRect(building.x - 16, building.y - 11, 32, 22);
+                    ctx.strokeStyle = palette.field;
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(building.x - 16, building.y - 11, 32, 22);
+                    ctx.fillStyle = palette.field;
+                    ctx.fillRect(building.x - 12, building.y - 7, 24, 5);
+                    ctx.fillRect(building.x - 12, building.y + 1, 24, 5);
+                }
             } else if (building.type === 'irrigation') {
                 ctx.strokeStyle = '#73b8dd';
                 ctx.lineWidth = 2;
@@ -1636,9 +1688,135 @@
                 ctx.stroke();
             }
             if (this.world.selectedEntity === building) {
+                const rect = this.getBuildingSelectionRect(building);
                 ctx.strokeStyle = '#fff1a8';
                 ctx.lineWidth = 2;
-                ctx.strokeRect(building.x - 18, building.y - 16, 36, 32);
+                ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+            }
+        }
+
+        getCropStructureFrame(building) {
+            const visualSkew = this.getStructureVisualCycleSkew(building);
+            const normalizedGrowth = clamp((building.harvestTimer || 0) / (18 * visualSkew), 0, 0.999);
+            const visibleFrames = STRUCTURE_SPRITE_CONFIG.frames.crop;
+            const stage = Math.min(
+                visibleFrames.length - 1,
+                Math.floor(normalizedGrowth * visibleFrames.length)
+            );
+            return visibleFrames[stage];
+        }
+
+        getStructureVisualCycleSkew(building) {
+            const seed = String(building?.id || `${building?.type || 'structure'}:${building?.x || 0}:${building?.y || 0}`);
+            let hash = 0;
+            for (let index = 0; index < seed.length; index += 1) {
+                hash = ((hash * 31) + seed.charCodeAt(index)) >>> 0;
+            }
+            return 0.9 + ((hash % 21) / 100);
+        }
+
+        getAlignedCropRect(building) {
+            const spanCols = 2;
+            const spanRows = 2;
+            const width = CELL_WIDTH * spanCols;
+            const height = CELL_HEIGHT * spanRows;
+            const maxCol = Math.floor(WORLD_WIDTH / CELL_WIDTH) - spanCols;
+            const maxRow = Math.floor(WORLD_HEIGHT / CELL_HEIGHT) - spanRows;
+            const col = Number.isFinite(building.gridCol)
+                ? clamp(building.gridCol, 0, maxCol)
+                : clamp(Math.round(building.x / CELL_WIDTH) - 1, 0, maxCol);
+            const row = Number.isFinite(building.gridRow)
+                ? clamp(building.gridRow, 0, maxRow)
+                : clamp(Math.round(building.y / CELL_HEIGHT) - 1, 0, maxRow);
+            return {
+                x: col * CELL_WIDTH,
+                y: row * CELL_HEIGHT,
+                width,
+                height
+            };
+        }
+
+        getBuildingSelectionRect(building) {
+            if (building.type === 'farmPlot' || building.type === 'engineeredFarm') {
+                return this.getAlignedCropRect(building);
+            }
+            if (building.type === 'hut') {
+                return {
+                    x: building.x - CELL_WIDTH,
+                    y: building.y - CELL_HEIGHT,
+                    width: CELL_WIDTH * 2,
+                    height: CELL_HEIGHT * 2
+                };
+            }
+            return {
+                x: building.x - 18,
+                y: building.y - 16,
+                width: 36,
+                height: 32
+            };
+        }
+
+        drawStructureSprite(ctx, building, frame, options = {}) {
+            if (!this.structureSpriteReady || !this.structureSprite || !Number.isFinite(frame)) {
+                return false;
+            }
+            const sourceY = Number.isFinite(options.sourceY)
+                ? options.sourceY
+                : frame * STRUCTURE_SPRITE_CONFIG.frameHeight;
+            const sourceHeight = options.sourceHeight || STRUCTURE_SPRITE_CONFIG.frameHeight;
+            if (options.anchor === 'topLeft') {
+                const drawWidth = options.drawWidth || STRUCTURE_SPRITE_CONFIG.drawWidth;
+                const drawHeight = options.drawHeight || STRUCTURE_SPRITE_CONFIG.drawHeight;
+                ctx.drawImage(
+                    this.structureSprite,
+                    0,
+                    sourceY,
+                    STRUCTURE_SPRITE_CONFIG.frameWidth,
+                    sourceHeight,
+                    options.x,
+                    options.y,
+                    drawWidth,
+                    drawHeight
+                );
+                return true;
+            }
+            const drawWidth = options.drawWidth || STRUCTURE_SPRITE_CONFIG.drawWidth;
+            const drawHeight = options.drawHeight || STRUCTURE_SPRITE_CONFIG.drawHeight;
+            const yOffset = options.yOffset || 0;
+            ctx.drawImage(
+                this.structureSprite,
+                0,
+                sourceY,
+                STRUCTURE_SPRITE_CONFIG.frameWidth,
+                sourceHeight,
+                building.x - drawWidth * 0.5,
+                building.y - drawHeight * 0.75 + yOffset,
+                drawWidth,
+                drawHeight
+            );
+            return true;
+        }
+
+        drawBuildingRoofOverlays(ctx) {
+            for (const building of this.world.buildings) {
+                if (building.type !== 'hut') {
+                    continue;
+                }
+                if (!this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutRoof, {
+                    yOffset: -CELL_HEIGHT * 2,
+                    drawWidth: CELL_WIDTH * 2,
+                    drawHeight: CELL_HEIGHT * 2,
+                    sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY,
+                    sourceHeight: 128
+                })) {
+                    continue;
+                }
+                if (this.world.selectedEntity === building) {
+                    const rect = this.getBuildingSelectionRect(building);
+                    ctx.strokeStyle = '#fff1a8';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(rect.x, rect.y - CELL_HEIGHT * 2, rect.width, rect.height + CELL_HEIGHT * 2);
+                }
             }
         }
 
@@ -1757,7 +1935,7 @@
             const dy = colonist.y - previous.y;
             const movingByDelta = Math.abs(dx) + Math.abs(dy) > 0.12;
             const movingByVelocity = Math.abs(colonist.vx || 0) + Math.abs(colonist.vy || 0) > 4;
-            const moving = movingByDelta || colonist.state === 'moving' || (colonist.state === 'moving' && movingByVelocity);
+            const moving = movingByDelta || (colonist.state === 'moving' && movingByVelocity);
             let direction = previous.direction;
             if (moving) {
                 const dirX = movingByDelta ? dx : (colonist.vx || 0);
@@ -1769,7 +1947,8 @@
                 }
             }
             const workAnimation = this.getColonistWorkAnimation(colonist);
-            const animation = workAnimation || (moving ? 'walk' : this.getColonistStationaryAnimation(colonist));
+            const stationaryAnimation = this.getColonistStationaryAnimation(colonist);
+            const animation = workAnimation || (stationaryAnimation === 'fight' ? 'fight' : (moving ? 'walk' : stationaryAnimation));
             const frameCount =
                 animation === 'emote'
                     ? COLONIST_SPRITE_CONFIG.emoteFrameCount
@@ -1830,7 +2009,12 @@
             const sitIntents = new Set(['sleep', 'warm', 'socialize']);
             const fightIntents = new Set(['war', 'protect']);
             const isBattleReady = colonist.intent === 'war' ||
-                (colonist.intent === 'protect' && (colonist.assignedBattlefrontId || colonist.battleRole || colonist.lastBattleHitTtl > 0));
+                (colonist.intent === 'protect' && (
+                    colonist.assignedBattlefrontId ||
+                    colonist.battleRole ||
+                    colonist.lastBattleHitTtl > 0 ||
+                    (colonist.threat && colonist.threatDistance < 70)
+                ));
             if (fightIntents.has(colonist.intent) && isBattleReady) {
                 return 'fight';
             }

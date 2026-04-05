@@ -310,6 +310,31 @@
         }
     };
 
+    const BUILDING_FOOTPRINTS = {
+        campfire: 18,
+        leanTo: 26,
+        hut: 45,
+        storage: 28,
+        workshop: 30,
+        farmPlot: 45,
+        cottage: 34,
+        house: 40,
+        fortifiedStructure: 42,
+        kitchen: 30,
+        foodHall: 40,
+        storagePit: 24,
+        granary: 32,
+        warehouse: 42,
+        wall: 30,
+        watchtower: 28,
+        irrigation: 30,
+        mill: 34,
+        engineeredFarm: 45,
+        canal: 34,
+        civicComplex: 44,
+        stoneKeep: 48
+    };
+
     const BUILDING_UPGRADES = {
         cottage: ['hut'],
         house: ['cottage'],
@@ -2967,7 +2992,7 @@
                         .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))
                         .slice(0, 1);
                     for (const target of targets) {
-                        target.integrity = clamp(target.integrity - (0.45 + occupation.severity * 0.65), 0, target.maxIntegrity);
+                        this.applyBuildingDamage(target, 0.45 + occupation.severity * 0.65);
                         this.startRepairProject(target);
                     }
                     occupation.pressureTick = 4.4 + occupation.severity * 2.4;
@@ -4116,6 +4141,7 @@
             if (this.paused) {
                 return;
             }
+            this.normalizePlacedStructureFootprints();
 
             const seasonPace = this.getSimulationKnob('seasonPace');
             const scaledDt = dt * this.simulationSpeed;
@@ -5182,7 +5208,7 @@
                 this.recordFactionEvent(`${colony.name} clashed with the main settlement in a border skirmish.`);
             }
             if (attackPower > defensePower) {
-                vulnerable.integrity = clamp(vulnerable.integrity - (2.4 + battleScale * 1.8), 0, vulnerable.maxIntegrity);
+                this.applyBuildingDamage(vulnerable, 2.4 + battleScale * 1.8);
                 const foodLoss = Math.min(9, Math.max(2, colony.population + battleScale * 3));
                 const woodLoss = Math.min(5, Math.max(1, colony.population * 0.5 + battleScale * 2));
                 this.camp.food = Math.max(0, this.camp.food - foodLoss);
@@ -5197,7 +5223,7 @@
                         .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))
                         .slice(0, 2);
                     for (const target of extraTargets) {
-                        target.integrity = clamp(target.integrity - (1 + battleScale * 1.2), 0, target.maxIntegrity);
+                        this.applyBuildingDamage(target, 1 + battleScale * 1.2);
                         this.startRepairProject(target);
                     }
                     this.recordFactionEvent(`${colony.name} escalated the frontier fighting into a larger battle.`);
@@ -6166,6 +6192,23 @@
                 return 1;
             }
             return clamp(building.integrity / building.maxIntegrity, 0, 1);
+        }
+
+        applyBuildingDamage(building, amount, options = {}) {
+            if (!building || !Number.isFinite(amount) || amount <= 0) {
+                return 0;
+            }
+            const before = Number.isFinite(building.integrity)
+                ? building.integrity
+                : (building.maxIntegrity || 0);
+            const maxIntegrity = building.maxIntegrity || Math.max(1, before || 1);
+            const after = clamp(before - amount, 0, maxIntegrity);
+            const applied = before - after;
+            building.integrity = after;
+            if (applied > 0 && options.resetHarvest !== false && (building.type === 'farmPlot' || building.type === 'engineeredFarm')) {
+                building.harvestTimer = 0;
+            }
+            return applied;
         }
 
         getProjectRequirements(project) {
@@ -7563,6 +7606,8 @@
                 return {
                     x: upgradeTarget.x,
                     y: upgradeTarget.y,
+                    gridCol: upgradeTarget.gridCol ?? null,
+                    gridRow: upgradeTarget.gridRow ?? null,
                     targetBuildingId: upgradeTarget.id,
                     targetBuildingType: upgradeTarget.type
                 };
@@ -7574,18 +7619,20 @@
             const baseY = clamp(this.camp.y + Math.sin(angle) * ring, 60, this.height - 60);
             if (type === 'farmPlot') {
                 const plantingSpot = this.findPlantingSpot();
-                return {
-                    x: clamp(plantingSpot.x + (this.rng() - 0.5) * 18, 50, this.width - 50),
-                    y: clamp(plantingSpot.y + (this.rng() - 0.5) * 18, 50, this.height - 50)
-                };
+                const snapped = this.snapProjectSiteToGrid(type,
+                    clamp(plantingSpot.x + (this.rng() - 0.5) * 18, 50, this.width - 50),
+                    clamp(plantingSpot.y + (this.rng() - 0.5) * 18, 50, this.height - 50)
+                );
+                return this.findOpenProjectSite(type, snapped) || snapped;
             }
             if (type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
                 const farming = this.getDistrictCenter('farming');
                 if (farming) {
-                    return {
-                        x: clamp(farming.x + (this.rng() - 0.5) * 26, 50, this.width - 50),
-                        y: clamp(farming.y + (this.rng() - 0.5) * 26, 50, this.height - 50)
-                    };
+                    const snapped = this.snapProjectSiteToGrid(type,
+                        clamp(farming.x + (this.rng() - 0.5) * 26, 50, this.width - 50),
+                        clamp(farming.y + (this.rng() - 0.5) * 26, 50, this.height - 50)
+                    );
+                    return this.findOpenProjectSite(type, snapped) || snapped;
                 }
             }
             const districtType = this.getProjectDistrictType(type);
@@ -7603,7 +7650,175 @@
                 x = clamp(anchor.x + bearing.y * side * 26 + (this.rng() - 0.5) * 10, 50, this.width - 50);
                 y = clamp(anchor.y - bearing.x * side * 26 + (this.rng() - 0.5) * 10, 50, this.height - 50);
             }
-            return { x, y: y || baseY };
+            const snapped = this.snapProjectSiteToGrid(type, x, y || baseY);
+            return this.findOpenProjectSite(type, snapped) || snapped;
+        }
+
+        getPlacementSpan(type) {
+            if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'hut') {
+                return { cols: 2, rows: 2 };
+            }
+            return { cols: 1, rows: 1 };
+        }
+
+        snapProjectSiteToGrid(type, x, y) {
+            const span = this.getPlacementSpan(type);
+            const col = clamp(Math.round(x / CELL_WIDTH) - Math.floor(span.cols / 2), 0, GRID_COLS - span.cols);
+            const row = clamp(Math.round(y / CELL_HEIGHT) - Math.floor(span.rows / 2), 0, GRID_ROWS - span.rows);
+            return {
+                x: col * CELL_WIDTH + CELL_WIDTH * span.cols * 0.5,
+                y: row * CELL_HEIGHT + CELL_HEIGHT * span.rows * 0.5,
+                gridCol: col,
+                gridRow: row
+            };
+        }
+
+        getEntryAnchor(entry, type = entry?.type) {
+            if (!entry || !type) {
+                return null;
+            }
+            if (Number.isFinite(entry.gridCol) && Number.isFinite(entry.gridRow)) {
+                const span = this.getPlacementSpan(type);
+                return {
+                    gridCol: entry.gridCol,
+                    gridRow: entry.gridRow,
+                    x: entry.gridCol * CELL_WIDTH + CELL_WIDTH * span.cols * 0.5,
+                    y: entry.gridRow * CELL_HEIGHT + CELL_HEIGHT * span.rows * 0.5
+                };
+            }
+            return this.snapProjectSiteToGrid(type, entry.x, entry.y);
+        }
+
+        isFootprintOpen(type, anchor, occupied) {
+            const span = this.getPlacementSpan(type);
+            for (let row = 0; row < span.rows; row += 1) {
+                for (let col = 0; col < span.cols; col += 1) {
+                    const key = `${anchor.gridCol + col},${anchor.gridRow + row}`;
+                    if (occupied.has(key)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        markFootprint(type, anchor, occupied) {
+            const span = this.getPlacementSpan(type);
+            for (let row = 0; row < span.rows; row += 1) {
+                for (let col = 0; col < span.cols; col += 1) {
+                    occupied.add(`${anchor.gridCol + col},${anchor.gridRow + row}`);
+                }
+            }
+        }
+
+        assignEntryAnchor(entry, type, anchor) {
+            if (!entry || !anchor) {
+                return;
+            }
+            entry.gridCol = anchor.gridCol;
+            entry.gridRow = anchor.gridRow;
+            entry.x = anchor.x;
+            entry.y = anchor.y;
+        }
+
+        findOpenAnchor(type, originX, originY, occupied) {
+            let anchor = this.snapProjectSiteToGrid(type, originX, originY);
+            if (this.isFootprintOpen(type, anchor, occupied)) {
+                return anchor;
+            }
+            const attempts = 28;
+            const spread = Math.max(1, Math.round(this.getPlacementRadius(type) / Math.min(CELL_WIDTH, CELL_HEIGHT)));
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                const angle = this.rng() * Math.PI * 2;
+                const distanceOut = (spread + attempt) * Math.min(CELL_WIDTH, CELL_HEIGHT);
+                anchor = this.snapProjectSiteToGrid(
+                    type,
+                    clamp(originX + Math.cos(angle) * distanceOut, 50, this.width - 50),
+                    clamp(originY + Math.sin(angle) * distanceOut, 50, this.height - 50)
+                );
+                if (this.isFootprintOpen(type, anchor, occupied)) {
+                    return anchor;
+                }
+            }
+            return this.snapProjectSiteToGrid(type, originX, originY);
+        }
+
+        normalizePlacedStructureFootprints() {
+            const occupied = new Set();
+            const place = (entry, type) => {
+                const span = this.getPlacementSpan(type);
+                if (span.cols === 1 && span.rows === 1 && !Number.isFinite(entry.gridCol) && !Number.isFinite(entry.gridRow)) {
+                    return;
+                }
+                const anchor = this.findOpenAnchor(type, entry.x, entry.y, occupied);
+                this.assignEntryAnchor(entry, type, anchor);
+                this.markFootprint(type, anchor, occupied);
+            };
+            for (const building of this.buildings) {
+                place(building, building.type);
+            }
+            for (const project of this.projects) {
+                if (project.targetBuildingId) {
+                    continue;
+                }
+                place(project, project.type);
+            }
+        }
+
+        getPlacementRadius(type) {
+            return BUILDING_FOOTPRINTS[type] || 30;
+        }
+
+        isProjectSiteOpen(type, x, y, options = {}) {
+            const radius = this.getPlacementRadius(type);
+            const ignoreProjectId = options.ignoreProjectId || null;
+            const ignoreBuildingId = options.ignoreBuildingId || null;
+            const padding = options.padding ?? 12;
+            for (const building of this.buildings) {
+                if (building.id === ignoreBuildingId) {
+                    continue;
+                }
+                const otherRadius = this.getPlacementRadius(building.type);
+                if (distance({ x, y }, building) < radius + otherRadius + padding) {
+                    return false;
+                }
+            }
+            for (const project of this.projects) {
+                if (project.id === ignoreProjectId) {
+                    continue;
+                }
+                const otherRadius = this.getPlacementRadius(project.type);
+                if (distance({ x, y }, project) < radius + otherRadius + padding) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        findOpenProjectSite(type, origin, options = {}) {
+            if (!origin) {
+                return null;
+            }
+            const attempts = options.attempts || 18;
+            const spread = options.spread || Math.max(18, this.getPlacementRadius(type) * 0.8);
+            if (this.isProjectSiteOpen(type, origin.x, origin.y, options)) {
+                return {
+                    x: clamp(origin.x, 50, this.width - 50),
+                    y: clamp(origin.y, 50, this.height - 50)
+                };
+            }
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                const angle = this.rng() * Math.PI * 2;
+                const distanceOut = spread + attempt * 8;
+                const candidate = this.snapProjectSiteToGrid(type,
+                    clamp(origin.x + Math.cos(angle) * distanceOut, 50, this.width - 50),
+                    clamp(origin.y + Math.sin(angle) * distanceOut, 50, this.height - 50)
+                );
+                if (this.isProjectSiteOpen(type, candidate.x, candidate.y, options)) {
+                    return candidate;
+                }
+            }
+            return null;
         }
 
         startProject(type) {
@@ -7625,6 +7840,8 @@
                 type,
                 x: site.x,
                 y: site.y,
+                gridCol: site.gridCol ?? null,
+                gridRow: site.gridRow ?? null,
                 targetBuildingId: site.targetBuildingId || null,
                 targetBuildingType: site.targetBuildingType || null,
                 requirements,
@@ -7632,6 +7849,9 @@
                 buildProgress: 0,
                 buildTime: site.targetBuildingType ? Math.max(2, def.buildTime * 0.72) : def.buildTime
             };
+            if (!project.targetBuildingType && !this.isProjectSiteOpen(type, project.x, project.y, { ignoreProjectId: project.id })) {
+                return null;
+            }
             this.projects.push(project);
             this.pushEvent(project.targetBuildingType
                 ? `The colony planned to turn the ${project.targetBuildingType} into a ${type}.`
@@ -7794,6 +8014,8 @@
                 type: project.type,
                 x: project.x,
                 y: project.y,
+                gridCol: project.gridCol ?? null,
+                gridRow: project.gridRow ?? null,
                 completedDay: this.day,
                 completedYear: this.year,
                 harvestTimer: 0,
@@ -7871,7 +8093,7 @@
                     .filter((building) => this.getBuildingIntegrityRatio(building) < 0.72)
                     .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))[0];
                 if (fragile) {
-                    fragile.integrity = clamp(fragile.integrity - 1.4, 0, fragile.maxIntegrity);
+                    this.applyBuildingDamage(fragile, 1.4);
                     this.pushEvent(`A storm battered the ${fragile.type}.`);
                     this.weatherDamageCooldown = 14;
                 }
@@ -9991,6 +10213,7 @@
             this.recentLabor = clone(state.recentLabor || this.recentLabor);
             this.projects = clone(state.projects || []);
             this.buildings = clone(state.buildings || []);
+            this.normalizePlacedStructureFootprints();
             this.families = clone(state.families || []);
             this.relationshipEvents = clone(state.relationshipEvents || []);
             this.rituals = clone(state.rituals || []);
@@ -10305,7 +10528,7 @@
                 return false;
             }
             if (target.entityType === 'building') {
-                target.integrity = clamp(target.integrity - 12, 0, target.maxIntegrity || 12);
+                this.applyBuildingDamage(target, 12);
                 this.startRepairProject(target);
                 this.pushEvent(`Lightning struck the ${target.type}.`);
                 return true;
