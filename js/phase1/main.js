@@ -238,9 +238,14 @@
         }
 
         window.addEventListener('resize', scheduleResize);
-        canvas.addEventListener('gesturestart', gestureBlocker, { passive: false });
-        canvas.addEventListener('gesturechange', gestureBlocker, { passive: false });
-        canvas.addEventListener('gestureend', gestureBlocker, { passive: false });
+        [canvas, canvasContainer, document].forEach((target) => {
+            if (!target?.addEventListener) {
+                return;
+            }
+            target.addEventListener('gesturestart', gestureBlocker, { passive: false });
+            target.addEventListener('gesturechange', gestureBlocker, { passive: false });
+            target.addEventListener('gestureend', gestureBlocker, { passive: false });
+        });
         if (typeof window.ResizeObserver === 'function' && canvasContainer) {
             resizeObserver = new window.ResizeObserver(() => {
                 scheduleResize();

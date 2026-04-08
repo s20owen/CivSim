@@ -5639,6 +5639,7 @@
                     break;
                 case 'deliverWater':
                     this.camp.water = clamp(this.camp.water + colonist.carrying.amount, 0, 999);
+                    this.noteStorageDelivery(target);
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
                     break;
@@ -5753,6 +5754,7 @@
                 case 'deliverFood':
                     this.camp.food += colonist.carrying.amount;
                     this.recordFoodSource(colonist.carrying.source || 'foraged', colonist.carrying.amount * 0.28);
+                    this.noteStorageDelivery(target);
                     if (colonist.inventory.materials.hides > 0) {
                         this.addCampMaterial('hides', colonist.inventory.materials.hides);
                         colonist.inventory.materials.hides = 0;
@@ -5790,6 +5792,7 @@
                 case 'deliverWood':
                     this.camp.wood += colonist.carrying.amount;
                     this.camp.fireFuel += colonist.carrying.amount * 0.35;
+                    this.noteStorageDelivery(target);
                     this.addCampMaterial('logs', colonist.inventory.materials.logs);
                     this.addCampMaterial('fiber', colonist.inventory.materials.fiber);
                     colonist.inventory.materials.logs = 0;
@@ -5817,6 +5820,7 @@
                 case 'deliverStone':
                     this.camp.stone += colonist.carrying.amount;
                     this.camp.shelter = clamp(this.camp.shelter + colonist.carrying.amount * 0.4, 0, 100);
+                    this.noteStorageDelivery(target);
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
                     break;
@@ -6282,6 +6286,13 @@
 
         getStockpileSite() {
             return this.getStorageBuilding() || this.camp;
+        }
+
+        noteStorageDelivery(target, ttl = 1.2) {
+            const entity = target?.entity || target;
+            if (entity && entity !== this.camp && BUILDING_DEFS[entity.type]?.storageBonus > 0) {
+                entity.storageOpenTtl = Math.max(entity.storageOpenTtl || 0, ttl);
+            }
         }
 
         getResidentialBuildings() {
@@ -8063,6 +8074,7 @@
             this.structureRaidCooldown = Math.max(0, this.structureRaidCooldown - dt * disasterKnob);
             this.weatherDamageCooldown = Math.max(0, this.weatherDamageCooldown - dt * disasterKnob);
             for (const building of this.buildings) {
+                building.storageOpenTtl = Math.max(0, (building.storageOpenTtl || 0) - dt);
                 if (!building.maxIntegrity) {
                     building.maxIntegrity = BUILDING_DEFS[building.type]?.durability || 30;
                     building.integrity = building.integrity || building.maxIntegrity;

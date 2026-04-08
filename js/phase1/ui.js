@@ -409,6 +409,16 @@
                 }
                 event.preventDefault();
             }, { passive: false });
+
+            this.renderer.canvas.addEventListener('touchcancel', (event) => {
+                this.touchMode = null;
+                this.touchDistance = 0;
+                this.touchCenter = null;
+                this.isDragging = false;
+                this.lastPointer = null;
+                this.dragDistance = 0;
+                event.preventDefault();
+            }, { passive: false });
         }
 
         getTouchDistance(touches) {

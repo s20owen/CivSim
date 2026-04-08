@@ -15,6 +15,18 @@
             hutRoof: 5
         }
     };
+    const FOOD_STORAGE_SPRITE_CONFIG = {
+        src: 'Food_Storage.png',
+        frameWidth: 128,
+        frameHeight: 137,
+        drawWidth: 36,
+        drawHeight: 44,
+        frames: {
+            closed: 0,
+            damaged: 1,
+            open: 2
+        }
+    };
     const COLONIST_SPRITE_CONFIG = {
         src: 'character-spritesheet.png',
         frameWidth: 64,
@@ -87,10 +99,13 @@
             this.cameraY = world.camp.y;
             this.structureSprite = null;
             this.structureSpriteReady = false;
+            this.foodStorageSprite = null;
+            this.foodStorageSpriteReady = false;
             this.colonistSprite = null;
             this.colonistSpriteReady = false;
             this.colonistSpriteState = new Map();
             this.loadStructureSprite();
+            this.loadFoodStorageSprite();
             this.loadColonistSprite();
             this.resize();
         }
@@ -107,6 +122,20 @@
                 this.structureSpriteReady = false;
             };
             sprite.src = STRUCTURE_SPRITE_CONFIG.src;
+        }
+
+        loadFoodStorageSprite() {
+            const sprite = new Image();
+            sprite.onload = () => {
+                this.foodStorageSprite = sprite;
+                this.foodStorageSpriteReady = true;
+                this.render();
+            };
+            sprite.onerror = () => {
+                this.foodStorageSprite = null;
+                this.foodStorageSpriteReady = false;
+            };
+            sprite.src = FOOD_STORAGE_SPRITE_CONFIG.src;
         }
 
         loadColonistSprite() {
@@ -1491,11 +1520,13 @@
                 ctx.fillStyle = '#8f5a39';
                 ctx.fillRect(building.x - 6, building.y - 1, 12, 15);
             } else if (building.type === 'storage') {
-                ctx.fillStyle = palette.wood;
-                ctx.fillRect(building.x - 12, building.y - 9, 24, 18);
-                ctx.strokeStyle = palette.trim;
-                ctx.lineWidth = 1.2;
-                ctx.strokeRect(building.x - 12, building.y - 9, 24, 18);
+                if (!this.drawFoodStorageSprite(ctx, building)) {
+                    ctx.fillStyle = palette.wood;
+                    ctx.fillRect(building.x - 12, building.y - 9, 24, 18);
+                    ctx.strokeStyle = palette.trim;
+                    ctx.lineWidth = 1.2;
+                    ctx.strokeRect(building.x - 12, building.y - 9, 24, 18);
+                }
             } else if (building.type === 'storagePit') {
                 ctx.fillStyle = '#5c4330';
                 ctx.beginPath();
@@ -1664,7 +1695,8 @@
             this.decorateEraBuilding(ctx, building, palette);
             this.drawDietOverlay(ctx, building);
             const integrity = building.maxIntegrity ? (building.integrity / building.maxIntegrity) : 1;
-            if (integrity < 0.18) {
+            const hasCustomDamageSprite = building.type === 'storage' && this.foodStorageSpriteReady;
+            if (!hasCustomDamageSprite && integrity < 0.18) {
                 ctx.fillStyle = 'rgba(35, 28, 22, 0.42)';
                 ctx.beginPath();
                 ctx.arc(building.x, building.y + 4, 16, 0, Math.PI * 2);
@@ -1677,7 +1709,7 @@
                 ctx.lineTo(building.x + 9, building.y + 9);
                 ctx.stroke();
             }
-            if (integrity < 0.85) {
+            if (!hasCustomDamageSprite && integrity < 0.85) {
                 ctx.strokeStyle = integrity < 0.45 ? 'rgba(209, 82, 68, 0.85)' : 'rgba(232, 183, 84, 0.85)';
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
@@ -1748,6 +1780,14 @@
                     height: CELL_HEIGHT * 2
                 };
             }
+            if (building.type === 'storage' && this.foodStorageSpriteReady) {
+                return {
+                    x: building.x - FOOD_STORAGE_SPRITE_CONFIG.drawWidth * 0.5,
+                    y: building.y - FOOD_STORAGE_SPRITE_CONFIG.drawHeight * 0.65,
+                    width: FOOD_STORAGE_SPRITE_CONFIG.drawWidth,
+                    height: FOOD_STORAGE_SPRITE_CONFIG.drawHeight
+                };
+            }
             return {
                 x: building.x - 18,
                 y: building.y - 16,
@@ -1795,6 +1835,64 @@
                 drawHeight
             );
             return true;
+        }
+
+        drawFoodStorageSprite(ctx, building) {
+            if (!this.foodStorageSpriteReady || !this.foodStorageSprite) {
+                return false;
+            }
+            const frame = this.getFoodStorageFrame(building);
+            const sourceY = frame * FOOD_STORAGE_SPRITE_CONFIG.frameHeight;
+            const drawWidth = FOOD_STORAGE_SPRITE_CONFIG.drawWidth;
+            const drawHeight = FOOD_STORAGE_SPRITE_CONFIG.drawHeight;
+            ctx.drawImage(
+                this.foodStorageSprite,
+                0,
+                sourceY,
+                FOOD_STORAGE_SPRITE_CONFIG.frameWidth,
+                FOOD_STORAGE_SPRITE_CONFIG.frameHeight,
+                building.x - drawWidth * 0.5,
+                building.y - drawHeight * 0.65,
+                drawWidth,
+                drawHeight
+            );
+            return true;
+        }
+
+        getFoodStorageFrame(building) {
+            if (this.isFoodStorageOpen(building)) {
+                return FOOD_STORAGE_SPRITE_CONFIG.frames.open;
+            }
+            if (this.isFoodStorageDamaged(building)) {
+                return FOOD_STORAGE_SPRITE_CONFIG.frames.damaged;
+            }
+            return FOOD_STORAGE_SPRITE_CONFIG.frames.closed;
+        }
+
+        isFoodStorageDamaged(building) {
+            const maxIntegrity = Math.max(1, building.maxIntegrity || 1);
+            const integrity = Number.isFinite(building.integrity) ? building.integrity : maxIntegrity;
+            return integrity / maxIntegrity < 0.98;
+        }
+
+        isFoodStorageOpen(building) {
+            if ((building.storageOpenTtl || 0) > 0) {
+                return true;
+            }
+            const deliveryActions = new Set(['deliverFood', 'deliverWater', 'deliverWood', 'deliverStone']);
+            return (this.world.colonists || []).some((colonist) => {
+                if (!colonist.alive || colonist.state !== 'working') {
+                    return false;
+                }
+                const step = colonist.plan?.[colonist.planStep];
+                if (!step || !deliveryActions.has(step.action)) {
+                    return false;
+                }
+                const entity = step.entity;
+                return entity === building ||
+                    entity?.id === building.id ||
+                    distance(colonist, building) < Math.max(44, FOOD_STORAGE_SPRITE_CONFIG.drawWidth * 0.55);
+            });
         }
 
         drawBuildingRoofOverlays(ctx) {
