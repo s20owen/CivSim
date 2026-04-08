@@ -30,6 +30,10 @@ body {
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
     background:
         radial-gradient(circle at top, rgba(243, 201, 102, 0.18), transparent 30%),
         linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
