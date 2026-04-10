@@ -67,6 +67,93 @@
         { name: 'Cold Snap', temperature: -11, moisture: -0.08, thirst: 0.92, warmth: 1.62, color: 'rgba(176, 206, 255, 0.14)' },
         { name: 'Drought', temperature: 8, moisture: -0.26, thirst: 1.38, warmth: 1.04, color: 'rgba(214, 170, 88, 0.15)' }
     ];
+    const WEATHER_TYPE_LOOKUP = Object.fromEntries(WEATHER_TYPES.map((entry) => [entry.name.toLowerCase(), entry]));
+    const WEATHER_LAYER_PRESETS = {
+        Clear: {
+            precipitationType: 'none',
+            intensity: 0.06,
+            fogDensity: 0.02,
+            darkness: 0.02,
+            dustDensity: 0,
+            wetnessTarget: 0.04,
+            puddleTarget: 0,
+            snowTarget: 0,
+            splashRate: 0,
+            leafDrift: 0.08,
+            ambient: 'clear',
+            transitionSeconds: 3
+        },
+        Cloudy: {
+            precipitationType: 'none',
+            intensity: 0.28,
+            fogDensity: 0.12,
+            darkness: 0.08,
+            dustDensity: 0,
+            wetnessTarget: 0.12,
+            puddleTarget: 0.04,
+            snowTarget: 0,
+            splashRate: 0,
+            leafDrift: 0.14,
+            ambient: 'cloudy',
+            transitionSeconds: 4
+        },
+        Rain: {
+            precipitationType: 'rain',
+            intensity: 0.64,
+            fogDensity: 0.1,
+            darkness: 0.14,
+            dustDensity: 0,
+            wetnessTarget: 0.68,
+            puddleTarget: 0.32,
+            snowTarget: 0,
+            splashRate: 0.65,
+            leafDrift: 0.18,
+            ambient: 'rain',
+            transitionSeconds: 5
+        },
+        Storm: {
+            precipitationType: 'rain',
+            intensity: 0.94,
+            fogDensity: 0.16,
+            darkness: 0.28,
+            dustDensity: 0,
+            wetnessTarget: 0.94,
+            puddleTarget: 0.76,
+            snowTarget: 0,
+            splashRate: 1,
+            leafDrift: 0.3,
+            ambient: 'storm',
+            transitionSeconds: 6
+        },
+        'Cold Snap': {
+            precipitationType: 'snow',
+            intensity: 0.72,
+            fogDensity: 0.14,
+            darkness: 0.12,
+            dustDensity: 0,
+            wetnessTarget: 0.08,
+            puddleTarget: 0.02,
+            snowTarget: 0.7,
+            splashRate: 0.08,
+            leafDrift: 0.24,
+            ambient: 'snow',
+            transitionSeconds: 6
+        },
+        Drought: {
+            precipitationType: 'dust',
+            intensity: 0.56,
+            fogDensity: 0.02,
+            darkness: 0.07,
+            dustDensity: 0.52,
+            wetnessTarget: 0,
+            puddleTarget: 0,
+            snowTarget: 0,
+            splashRate: 0,
+            leafDrift: 0.16,
+            ambient: 'drywind',
+            transitionSeconds: 4
+        }
+    };
 
     const BIOME_COLORS = {
         grassland: '#7f9f46',
@@ -537,6 +624,296 @@
         return JSON.parse(JSON.stringify(value));
     }
 
+    function createWeatherManagerState() {
+        return {
+            type: 'Clear',
+            targetType: 'Clear',
+            precipitationType: 'none',
+            intensity: 0.06,
+            targetIntensity: 0.06,
+            windX: 0.18,
+            windY: 0.08,
+            targetWindX: 0.18,
+            targetWindY: 0.08,
+            darkness: 0.02,
+            targetDarkness: 0.02,
+            fogDensity: 0.02,
+            targetFogDensity: 0.02,
+            dustDensity: 0,
+            targetDustDensity: 0,
+            surfaceWetness: 0.04,
+            puddleLevel: 0,
+            snowCover: 0,
+            splashRate: 0,
+            leafDrift: 0.08,
+            temperature: 0.5,
+            gustStrength: 0,
+            transition: 1,
+            transitionElapsed: 0,
+            transitionDuration: 3,
+            lightningFlash: 0,
+            lightningCooldown: 0,
+            ambient: 'clear'
+        };
+    }
+
+    class WeatherManager {
+        constructor(world, snapshot = null) {
+            this.world = world;
+            this.state = {
+                ...createWeatherManagerState(),
+                ...(clone(snapshot || {}) || {})
+            };
+            this.lastPresetName = null;
+            this.syncToCurrent(true);
+        }
+
+        exportState() {
+            return clone(this.state);
+        }
+
+        getCurrentPreset() {
+            return this.world.getWeatherPreset();
+        }
+
+        syncToCurrent(immediate = false) {
+            this.setTargetFromPreset(this.getCurrentPreset(), immediate);
+        }
+
+        setTargetFromPreset(preset, immediate = false) {
+            if (!preset) {
+                return;
+            }
+            const target = this.buildTargetState(preset);
+            const changed = target.type !== this.state.targetType || target.precipitationType !== this.state.precipitationType;
+            const oldTargetType = this.state.targetType || this.state.type;
+            this.lastPresetName = preset.name;
+            this.state.targetType = target.type;
+            this.state.precipitationType = target.precipitationType;
+            this.state.targetIntensity = target.intensity;
+            this.state.targetWindX = target.windX;
+            this.state.targetWindY = target.windY;
+            this.state.targetDarkness = target.darkness;
+            this.state.targetFogDensity = target.fogDensity;
+            this.state.targetDustDensity = target.dustDensity;
+            this.state.splashRate = target.splashRate;
+            this.state.leafDrift = target.leafDrift;
+            this.state.ambient = target.ambient;
+            this.state.temperature = target.temperature;
+            this.state.transitionDuration = target.transitionSeconds;
+            if (immediate) {
+                this.state.type = target.type;
+                this.state.intensity = target.intensity;
+                this.state.windX = target.windX;
+                this.state.windY = target.windY;
+                this.state.darkness = target.darkness;
+                this.state.fogDensity = target.fogDensity;
+                this.state.dustDensity = target.dustDensity;
+                this.state.surfaceWetness = target.wetnessTarget;
+                this.state.puddleLevel = target.puddleTarget;
+                this.state.snowCover = target.snowTarget;
+                this.state.transition = 1;
+                this.state.transitionElapsed = this.state.transitionDuration;
+                this.state.lightningFlash = 0;
+                this.state.lightningCooldown = 0;
+                return;
+            }
+            if (changed) {
+                const leavingWet =
+                    oldTargetType === 'Rain' ||
+                    oldTargetType === 'Storm' ||
+                    this.state.surfaceWetness > 0.18 ||
+                    this.state.puddleLevel > 0.08;
+                const leavingSnow =
+                    oldTargetType === 'Cold Snap' ||
+                    this.state.snowCover > 0.06;
+                const extraTransition =
+                    (leavingWet ? this.state.surfaceWetness * 3.2 + this.state.puddleLevel * 4.8 : 0) +
+                    (leavingSnow ? this.state.snowCover * 5.5 : 0);
+                this.state.transitionElapsed = 0;
+                this.state.transition = 0;
+                this.state.transitionDuration = Math.max(target.transitionSeconds, target.transitionSeconds + extraTransition);
+            }
+        }
+
+        buildTargetState(preset) {
+            const layerPreset = WEATHER_LAYER_PRESETS[preset.name] || WEATHER_LAYER_PRESETS.Clear;
+            const season = this.world.getSeason().name;
+            const angleSeed =
+                this.world.day * 0.73 +
+                this.world.year * 1.17 +
+                this.world.elapsed * 0.018 +
+                preset.temperature * 0.09;
+            const windAngle = angleSeed + (preset.name === 'Storm' ? 0.9 : preset.name === 'Drought' ? -0.6 : 0.22);
+            const windSpeed =
+                preset.name === 'Storm' ? 0.95 :
+                preset.name === 'Rain' ? 0.52 :
+                preset.name === 'Cold Snap' ? 0.42 :
+                preset.name === 'Drought' ? 0.48 :
+                preset.name === 'Cloudy' ? 0.26 :
+                0.18;
+            const snowTarget = preset.name === 'Cold Snap'
+                ? (season === 'Winter' ? layerPreset.snowTarget : layerPreset.snowTarget * 0.45)
+                : 0;
+            return {
+                type: preset.name,
+                precipitationType: layerPreset.precipitationType,
+                intensity: layerPreset.intensity,
+                windX: Math.cos(windAngle) * windSpeed,
+                windY: Math.sin(windAngle) * windSpeed,
+                darkness: layerPreset.darkness,
+                fogDensity: layerPreset.fogDensity,
+                dustDensity: layerPreset.dustDensity,
+                wetnessTarget: layerPreset.wetnessTarget,
+                puddleTarget: layerPreset.puddleTarget,
+                snowTarget,
+                splashRate: layerPreset.splashRate,
+                leafDrift: layerPreset.leafDrift,
+                temperature: clamp((preset.temperature + 14) / 28, 0, 1),
+                ambient: layerPreset.ambient,
+                transitionSeconds: layerPreset.transitionSeconds
+            };
+        }
+
+        update(dt) {
+            const preset = this.getCurrentPreset();
+            if (preset?.name !== this.lastPresetName) {
+                this.setTargetFromPreset(preset, false);
+            }
+            const target = this.buildTargetState(preset);
+            const approach = (current, desired, upRate, downRate, minEase = 0.003, maxEase = 0.18) => {
+                const rate = desired > current ? upRate : downRate;
+                return lerp(current, desired, clamp(dt * rate, minEase, maxEase));
+            };
+            const gustWave =
+                Math.sin(this.world.elapsed * 0.32 + this.world.day * 0.73) * 0.5 +
+                Math.sin(this.world.elapsed * 0.11 + this.world.year * 0.37) * 0.35 +
+                Math.sin(this.world.elapsed * 0.58 + target.temperature * 2.4) * 0.15;
+            const gustStrength = clamp((gustWave * 0.5 + 0.5) * (0.18 + target.intensity * 0.52), 0, 1);
+            this.state.gustStrength = approach(this.state.gustStrength || 0, gustStrength, 0.34, 0.26, 0.002, 0.1);
+
+            const gustScale = 1 + (this.state.gustStrength - 0.35) * 0.32;
+            const desiredWindX = target.windX * gustScale;
+            const desiredWindY = target.windY * (1 + (this.state.gustStrength - 0.35) * 0.22);
+            this.state.intensity = approach(this.state.intensity, target.intensity, 0.34 + target.intensity * 0.18, 0.14 + target.intensity * 0.06, 0.004, 0.24);
+            this.state.windX = approach(this.state.windX, desiredWindX, 0.28, 0.22, 0.003, 0.16);
+            this.state.windY = approach(this.state.windY, desiredWindY, 0.28, 0.22, 0.003, 0.16);
+            this.state.darkness = approach(this.state.darkness, target.darkness, 0.18, 0.1, 0.003, 0.12);
+            this.state.fogDensity = approach(this.state.fogDensity, target.fogDensity, 0.12, 0.07, 0.003, 0.09);
+            this.state.dustDensity = approach(this.state.dustDensity, target.dustDensity, 0.12, 0.07, 0.003, 0.09);
+            const wetnessUpRate = target.type === 'Rain' || target.type === 'Storm' ? 0.12 : target.type === 'Cloudy' ? 0.045 : 0.025;
+            const wetnessDownRate = target.type === 'Drought' ? 0.06 : 0.018;
+            const puddleUpRate = target.type === 'Storm' ? 0.09 : target.type === 'Rain' ? 0.06 : 0.02;
+            const puddleDownRate = target.type === 'Drought' ? 0.05 : 0.012;
+            const snowUpRate = target.type === 'Cold Snap' ? 0.06 : 0.012;
+            const snowDownRate = target.temperature > 0.55 ? 0.03 : 0.008;
+            this.state.surfaceWetness = approach(this.state.surfaceWetness, target.wetnessTarget, wetnessUpRate, wetnessDownRate, 0.002, 0.08);
+            this.state.puddleLevel = approach(this.state.puddleLevel, target.puddleTarget, puddleUpRate, puddleDownRate, 0.0015, 0.06);
+            this.state.snowCover = approach(this.state.snowCover, target.snowTarget, snowUpRate, snowDownRate, 0.001, 0.05);
+            this.state.lightningCooldown = Math.max(0, this.state.lightningCooldown - dt);
+            this.state.lightningFlash = Math.max(0, this.state.lightningFlash - dt * (this.state.lightningFlash > 0.3 ? 0.9 : 1.35));
+            if (target.type === 'Storm' && this.state.lightningCooldown <= 0) {
+                const strikeChance = dt * (0.04 + this.state.intensity * 0.075);
+                if (Math.sin(this.world.elapsed * 3.7 + this.world.day * 0.61) > 0.96 || this.world.rng() < strikeChance) {
+                    this.state.lightningFlash = clamp(0.6 + this.state.intensity * 0.35, 0, 1);
+                    this.state.lightningCooldown = 2.5 + this.world.rng() * 3.5;
+                }
+            }
+            this.state.transitionElapsed = Math.min(this.state.transitionDuration, this.state.transitionElapsed + dt);
+            this.state.transition = clamp(this.state.transitionElapsed / Math.max(0.1, this.state.transitionDuration), 0, 1);
+            if (this.state.transition >= 1) {
+                this.state.type = target.type;
+            }
+        }
+
+        getRegionModifier(x, y, options = {}) {
+            const cell = this.world.getCellAt(x, y);
+            const modifier = {
+                precipitationMultiplier: 1,
+                windMultiplier: 1,
+                fogBoost: 0,
+                sheltered: Boolean(options.indoors || options.sheltered)
+            };
+            if (!cell) {
+                return modifier;
+            }
+            if (cell.biome === 'forest') {
+                modifier.windMultiplier *= 0.72;
+                modifier.fogBoost += 0.05;
+            } else if (cell.biome === 'rocky') {
+                modifier.windMultiplier *= cell.terrain?.mountain ? 1.25 : 1.08;
+            } else if (cell.biome === 'water') {
+                modifier.windMultiplier *= 1.1;
+                modifier.fogBoost += 0.08;
+            } else if (cell.biome === 'fertile') {
+                modifier.precipitationMultiplier *= 1.04;
+            }
+            if (cell.terrain?.marsh && !cell.terrain?.drained) {
+                modifier.fogBoost += 0.12;
+            }
+            if (cell.terrain?.hill) {
+                modifier.windMultiplier *= 1.08;
+            }
+            return modifier;
+        }
+
+        getStateAt(x, y, options = {}) {
+            const modifier = this.getRegionModifier(x, y, options);
+            const precipitationFactor = modifier.sheltered ? 0 : modifier.precipitationMultiplier;
+            const windFactor = modifier.sheltered ? 0.3 : modifier.windMultiplier;
+            const fog = clamp(this.state.fogDensity + modifier.fogBoost, 0, 1);
+            const precipitation = this.state.precipitationType === 'none'
+                ? 0
+                : clamp(this.state.intensity * precipitationFactor, 0, 1);
+            const movementPenalty = clamp(
+                this.state.snowCover * 0.26 +
+                this.state.puddleLevel * 0.18 +
+                precipitation * 0.1 +
+                (this.state.type === 'Storm' ? 0.05 : 0),
+                0,
+                0.42
+            );
+            return {
+                ...clone(this.state),
+                windX: this.state.windX * windFactor,
+                windY: this.state.windY * windFactor,
+                fogDensity: fog,
+                precipitationIntensity: precipitation,
+                visibility: clamp(1 - fog * 0.62 - precipitation * 0.34 - (this.state.darkness * 0.24), 0.28, 1),
+                movementPenalty,
+                lightningRisk: this.state.type === 'Storm' && !modifier.sheltered
+                    ? clamp(this.state.intensity * 0.78 * windFactor, 0, 1)
+                    : 0,
+                stealthBonus: clamp((this.state.type === 'Storm' ? 0.18 : 0) + fog * 0.28 + precipitation * 0.12, 0, 0.42),
+                firePenalty: clamp((this.state.type === 'Rain' ? 0.18 : 0) + (this.state.type === 'Storm' ? 0.34 : 0), 0, 0.5),
+                ambientProfile: modifier.sheltered && precipitation > 0 ? `${this.state.ambient}-muffled` : this.state.ambient
+            };
+        }
+
+        getGlobalState() {
+            const precipitation = this.state.precipitationType === 'none'
+                ? 0
+                : clamp(this.state.intensity, 0, 1);
+            return {
+                ...clone(this.state),
+                precipitationIntensity: precipitation,
+                visibility: clamp(1 - this.state.fogDensity * 0.62 - precipitation * 0.34 - (this.state.darkness * 0.24), 0.28, 1),
+                movementPenalty: clamp(
+                    this.state.snowCover * 0.26 +
+                    this.state.puddleLevel * 0.18 +
+                    precipitation * 0.1 +
+                    (this.state.type === 'Storm' ? 0.05 : 0),
+                    0,
+                    0.42
+                ),
+                lightningRisk: this.state.type === 'Storm' ? clamp(this.state.intensity * 0.78, 0, 1) : 0,
+                stealthBonus: clamp((this.state.type === 'Storm' ? 0.18 : 0) + this.state.fogDensity * 0.28 + precipitation * 0.12, 0, 0.42),
+                firePenalty: clamp((this.state.type === 'Rain' ? 0.18 : 0) + (this.state.type === 'Storm' ? 0.34 : 0), 0, 0.5),
+                ambientProfile: this.state.ambient
+            };
+        }
+    }
+
     function exportColonistSnapshot(colonist) {
         const {
             worldRef,
@@ -596,7 +973,8 @@
                 starvation: 0,
                 exposure: 0,
                 exhaustion: 0,
-                predatorAttack: 0
+                predatorAttack: 0,
+                lightningStrike: 0
             },
             dangerZones: [],
             shelterSpots: [],
@@ -910,7 +1288,11 @@
             this.mood.grief = clamp(this.emotionalMemory.griefLoad * 100, 0, 100);
             this.ageYears += dt / YEAR_DURATION;
             this.lifeStage = this.ageYears < 16 ? 'youth' : 'adult';
-            this.threat = world.findNearestPredator(this, 140);
+            const localWeather = world.getWeatherStateAt(this.x, this.y, {
+                sheltered: distance(this, world.camp) < 44 && world.camp.shelter > 28
+            });
+            const threatVisionRadius = world.getWeatherVisibilityRadius(this, 140, { sheltered: localWeather.visibility > 0.82 && distance(this, world.camp) < 36 });
+            this.threat = world.findNearestPredator(this, threatVisionRadius);
             this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
 
             const weather = world.getWeather();
@@ -1445,9 +1827,11 @@
             const dx = target.x - this.x;
             const dy = target.y - this.y;
             const length = Math.hypot(dx, dy) || 1;
-            const step = Math.min(length, this.speed * dt);
-            this.vx = (dx / length) * this.speed;
-            this.vy = (dy / length) * this.speed;
+            const movementMultiplier = this.worldRef ? this.worldRef.getMovementSpeedMultiplierAt(this.x, this.y) : 1;
+            const effectiveSpeed = this.speed * movementMultiplier;
+            const step = Math.min(length, effectiveSpeed * dt);
+            this.vx = (dx / length) * effectiveSpeed;
+            this.vy = (dy / length) * effectiveSpeed;
             if (this.worldRef) {
                 this.worldRef.recordTrafficAtPosition(this.x, this.y, 0.06);
             }
@@ -1483,6 +1867,7 @@
             this.weatherTimer = 55;
             this.weatherDuration = 55;
             this.forcedWeather = null;
+            this.weatherManager = new WeatherManager(this);
             this.simulationSpeed = 1;
             this.paused = false;
             this.generation = (inheritedMemory?.generation || 0) + 1;
@@ -1517,6 +1902,8 @@
             this.structureRaidCooldown = 0;
             this.mainAttackCooldown = 30;
             this.weatherDamageCooldown = 0;
+            this.lightningStrikeCooldown = 0;
+            this.lastResolvedLightningFlash = 0;
             this.usedNames = new Set();
             this.borderIncidents = [];
             this.factionEvents = [];
@@ -2220,6 +2607,12 @@
             return this.branchColonies.filter((colony) => Number.isFinite(colony.x) && Number.isFinite(colony.y));
         }
 
+        getColonySupportCooldownDuration(colony, variance = 18, base = null) {
+            const isDaughter = (colony?.type || 'daughter') === 'daughter';
+            const anchor = base ?? (isDaughter ? 52 : 40);
+            return anchor + this.rng() * variance;
+        }
+
         normalizeBranchColony(colony, index = 0) {
             const inheritedCulture = clone(colony.inheritedCulture || this.lineageMemory.culturalValues);
             const legacyProfile = this.getCultureLegacyProfile(inheritedCulture, {
@@ -2254,6 +2647,7 @@
                 (daughterBias && defaultTrade > 0.58 && defaultTrust > 0.48 ? 'trading' : 'cautious');
             return {
                 ...clone(colony),
+                entityType: 'colony',
                 id: colony.id || index + 1,
                 name: colony.name || `${colony.type === 'splinter' ? 'Splinter' : 'Daughter'} Hold ${index + 1}`,
                 food: Number.isFinite(colony.food) ? colony.food : 10,
@@ -2264,7 +2658,7 @@
                 infoCooldown: Number.isFinite(colony.infoCooldown) ? colony.infoCooldown : (daughterBias ? 18 + this.rng() * 14 : 24 + this.rng() * 18),
                 raidCooldown: Number.isFinite(colony.raidCooldown) ? colony.raidCooldown : 34 + this.rng() * 14,
                 diplomacyCooldown: Number.isFinite(colony.diplomacyCooldown) ? colony.diplomacyCooldown : 10 + this.rng() * 12,
-                supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : 14 + this.rng() * 12,
+                supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : this.getColonySupportCooldownDuration(colony, colony.type === 'daughter' ? 18 : 12, colony.type === 'daughter' ? 54 : 40),
                 foundedDay: colony.foundedDay || this.day,
                 foundedYear: colony.foundedYear || this.year,
                 population: Number.isFinite(colony.population) ? colony.population : 2,
@@ -2613,7 +3007,9 @@
                 reinforcementValue: options.reinforcementValue || 0,
                 reinforceSide: options.reinforceSide || 'defenders',
                 targetColonyId: options.targetColonyId || null,
-                supportMode: options.supportMode || null
+                supportMode: options.supportMode || null,
+                supplies: clone(options.supplies || null),
+                courierName: options.courierName || null
             };
             this.factionParties.push(party);
             this.factionParties = this.factionParties.slice(-20);
@@ -2657,6 +3053,20 @@
                 if (party.targetColonyId) {
                     const targetColony = this.getActiveBranchColonies().find((entry) => entry.id === party.targetColonyId) || null;
                     if (targetColony) {
+                        if (party.supplies) {
+                            targetColony.food = clamp((targetColony.food || 0) + (party.supplies.food || 0), 0, 140);
+                            targetColony.water = clamp((targetColony.water || 0) + (party.supplies.water || 0), 0, 140);
+                            targetColony.wood = clamp((targetColony.wood || 0) + (party.supplies.wood || 0), 0, 80);
+                            targetColony.stone = clamp((targetColony.stone || 0) + (party.supplies.stone || 0), 0, 70);
+                            targetColony.recentAction = party.supportMode === 'main aid' ? 'receiving aid' : 'receiving convoy';
+                            this.recordFactionEvent(
+                                party.supportMode === 'main aid'
+                                    ? `The main settlement's supply caravan reached ${targetColony.name}.`
+                                    : `${party.colonyName}'s convoy reached ${targetColony.name}.`
+                            );
+                            this.spawnFactionEffect(party);
+                            continue;
+                        }
                         const army = targetColony.army || this.normalizeBranchColony(targetColony, targetColony.id - 1).army;
                         const reinforcement = Math.max(0.4, party.reinforcementValue || party.strength || 1);
                         if (party.type === 'refugee') {
@@ -4169,6 +4579,7 @@
                 this.weatherDuration = 42 + this.rng() * 34;
                 this.weatherTimer = this.weatherDuration;
             }
+            this.weatherManager.update(scaledDt);
 
             this.godMode.protectBubbleTtl = Math.max(0, this.godMode.protectBubbleTtl - scaledDt);
             this.godMode.divineSuggestion.ttl = Math.max(0, this.godMode.divineSuggestion.ttl - scaledDt);
@@ -4427,7 +4838,7 @@
                     reinforcementValue
                 });
                 colony.recentAction = reinforceSide === 'attackers' ? 'supporting assault' : 'sending reinforcements';
-                colony.supportCooldown = 40 + this.rng() * 24;
+                colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 22, colony.type === 'daughter' ? 58 : 40);
                 return;
             }
             const alliedTarget = this.getActiveBranchColonies()
@@ -4449,7 +4860,7 @@
                 effectLabel: 'Relief'
             });
             colony.recentAction = 'relieving ally';
-            colony.supportCooldown = 40 + this.rng() * 24;
+            colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 22, colony.type === 'daughter' ? 58 : 40);
         }
 
         resolveMainAllianceRelief() {
@@ -4479,7 +4890,7 @@
                     status: 'relief caravan',
                     effectLabel: 'Relief'
                 });
-                targetColony.supportCooldown = 32 + this.rng() * 20;
+                targetColony.supportCooldown = this.getColonySupportCooldownDuration(targetColony, 18, targetColony.type === 'daughter' ? 52 : 32);
                 this.mainAttackCooldown = 14 + this.rng() * 10;
                 this.recordFactionEvent(`The main settlement sent relief stores to ${targetColony.name}.`);
                 return true;
@@ -4542,7 +4953,7 @@
             aggressor.history.campaigns += battleScale > 0.6 ? 1 : 0;
             aggressor.recentAction = 'meeting relief force';
             targetColony.recentAction = 'relieved by main settlement';
-            targetColony.supportCooldown = 38 + this.rng() * 18;
+            targetColony.supportCooldown = this.getColonySupportCooldownDuration(targetColony, 18, targetColony.type === 'daughter' ? 56 : 38);
             this.mainAttackCooldown = 28 + this.rng() * 16;
             this.recordFactionEvent(`The main settlement marched to relieve ${targetColony.name} from ${aggressor.name}.`);
             return true;
@@ -4916,7 +5327,7 @@
                 supported = true;
             }
             if (supported) {
-                colony.supportCooldown = 44 + this.rng() * 22;
+                colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 22, colony.type === 'daughter' ? 64 : 44);
             }
         }
 
@@ -5557,13 +5968,14 @@
                 const focusedTarget = this.colonists.find((colonist) =>
                     colonist.alive && colonist.id === predator.targetColonistId
                 ) || null;
-                const target = focusedTarget && distance(predator, focusedTarget) < 260
+                const weatherScanRadius = this.getWeatherVisibilityRadius(predator, 180 - predatorCaution * 20);
+                const target = focusedTarget && distance(predator, focusedTarget) < this.getWeatherVisibilityRadius(predator, 260) * this.getWeatherStealthFactor(focusedTarget)
                     ? focusedTarget
-                    : this.findNearestColonist(predator, 180 - predatorCaution * 20);
+                    : this.findNearestColonist(predator, weatherScanRadius);
                 const defenders = this.colonists.filter((colonist) =>
                     colonist.alive &&
                     colonist.intent === 'protect' &&
-                    distance(colonist, predator) < 70
+                    distance(colonist, predator) < this.getWeatherVisibilityRadius(colonist, 70)
                 );
 
                 if (defenders.length >= 2 || campDeterrence > 0) {
@@ -5589,7 +6001,8 @@
                 predator.x = clamp(predator.x + (predator.homeX - predator.x) * 0.015, 24, this.width - 24);
                 predator.y = clamp(predator.y + (predator.homeY - predator.y) * 0.015, 24, this.height - 24);
 
-                if (predator.retreatTimer <= 0 && target && distance(predator, target) < (18 - predatorCaution * 2) && predator.attackCooldown <= 0) {
+                const attackReach = Math.max(10, (18 - predatorCaution * 2) + this.getWeatherStateAt(predator.x, predator.y).stealthBonus * 6);
+                if (predator.retreatTimer <= 0 && target && distance(predator, target) < attackReach && predator.attackCooldown <= 0) {
                     target.stats.health = clamp(target.stats.health - 24, 0, 100);
                     target.stats.morale = clamp(target.stats.morale - 12, 0, 100);
                     target.lastDamageCause = 'predatorAttack';
@@ -6213,6 +6626,84 @@
                 building.harvestTimer = 0;
             }
             return applied;
+        }
+
+        isPositionShelteredFromWeather(x, y) {
+            if (Math.hypot(this.camp.x - x, this.camp.y - y) < 52 && (this.camp.shelter || 0) >= 45) {
+                return true;
+            }
+            return this.buildings.some((building) =>
+                [
+                    'leanTo',
+                    'hut',
+                    'cottage',
+                    'house',
+                    'fortifiedStructure',
+                    'stoneKeep',
+                    'granary',
+                    'warehouse',
+                    'kitchen',
+                    'foodHall',
+                    'civicComplex'
+                ].includes(building.type) &&
+                this.getBuildingIntegrityRatio(building) > 0.35 &&
+                Math.hypot(building.x - x, building.y - y) < 42
+            );
+        }
+
+        resolveLightningStrike(weatherState) {
+            if (!weatherState || weatherState.type !== 'Storm') {
+                return false;
+            }
+            const exposedColonists = this.colonists
+                .filter((colonist) => colonist.alive && !this.isPositionShelteredFromWeather(colonist.x, colonist.y))
+                .map((colonist) => ({
+                    colonist,
+                    state: this.getWeatherStateAt(colonist.x, colonist.y)
+                }))
+                .filter((entry) => entry.state.lightningRisk > 0.2)
+                .sort((left, right) => right.state.lightningRisk - left.state.lightningRisk);
+            const exposedBuildings = this.buildings
+                .filter((building) =>
+                    ['watchtower', 'wall', 'campfire', 'leanTo', 'hut', 'storage', 'storagePit', 'granary', 'farmPlot', 'engineeredFarm'].includes(building.type) &&
+                    !this.isPositionShelteredFromWeather(building.x, building.y)
+                )
+                .map((building) => ({
+                    building,
+                    risk: this.getWeatherStateAt(building.x, building.y).lightningRisk +
+                        (building.type === 'watchtower' ? 0.22 : building.type === 'wall' ? 0.12 : building.type === 'campfire' ? 0.08 : 0) +
+                        (1 - this.getBuildingIntegrityRatio(building)) * 0.08
+                }))
+                .sort((left, right) => right.risk - left.risk);
+
+            const colonistChance = exposedColonists.length > 0
+                ? 0.44 + Math.min(0.2, exposedColonists[0].state.lightningRisk * 0.18)
+                : 0;
+            if (exposedColonists.length > 0 && (exposedBuildings.length === 0 || this.rng() < colonistChance)) {
+                const target = exposedColonists[0].colonist;
+                const strikeState = exposedColonists[0].state;
+                const damage = 14 + strikeState.lightningRisk * 18;
+                target.stats.health = clamp(target.stats.health - damage, 0, 100);
+                target.stats.energy = clamp(target.stats.energy - (8 + strikeState.lightningRisk * 8), 0, 100);
+                target.stats.morale = clamp(target.stats.morale - (10 + strikeState.lightningRisk * 10), 0, 100);
+                target.woundSeverity = clamp((target.woundSeverity || 0) + 0.14 + strikeState.lightningRisk * 0.16, 0, 1);
+                target.woundCount = Math.min(6, (target.woundCount || 0) + 1);
+                target.lastDamageCause = 'lightningStrike';
+                this.pushEvent(`Lightning struck near ${target.name}, leaving them badly shaken.`);
+                return true;
+            }
+            if (exposedBuildings.length > 0) {
+                const target = exposedBuildings[0].building;
+                const strikeDamage = 0.7 + exposedBuildings[0].risk * 1.2;
+                this.applyBuildingDamage(target, strikeDamage);
+                if (target.type === 'campfire') {
+                    this.camp.fireFuel = Math.max(0, this.camp.fireFuel - 2.5);
+                }
+                this.startRepairProject(target);
+                this.pushEvent(`Lightning struck the ${target.type}.`);
+                return true;
+            }
+            return false;
         }
 
         getProjectRequirements(project) {
@@ -7634,7 +8125,14 @@
                     clamp(plantingSpot.x + (this.rng() - 0.5) * 18, 50, this.width - 50),
                     clamp(plantingSpot.y + (this.rng() - 0.5) * 18, 50, this.height - 50)
                 );
-                return this.findOpenProjectSite(type, snapped) || snapped;
+                if (this.isProjectSiteWithinWorkingRange(type, snapped.x, snapped.y)) {
+                    return this.findOpenProjectSite(type, snapped) || snapped;
+                }
+                const fallback = this.snapProjectSiteToGrid(type,
+                    clamp(this.camp.x + 48 + (this.rng() - 0.5) * 24, 50, this.width - 50),
+                    clamp(this.camp.y + 36 + (this.rng() - 0.5) * 24, 50, this.height - 50)
+                );
+                return this.findOpenProjectSite(type, fallback) || fallback;
             }
             if (type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
                 const farming = this.getDistrictCenter('farming');
@@ -7643,7 +8141,9 @@
                         clamp(farming.x + (this.rng() - 0.5) * 26, 50, this.width - 50),
                         clamp(farming.y + (this.rng() - 0.5) * 26, 50, this.height - 50)
                     );
-                    return this.findOpenProjectSite(type, snapped) || snapped;
+                    if (this.isProjectSiteWithinWorkingRange(type, snapped.x, snapped.y)) {
+                        return this.findOpenProjectSite(type, snapped) || snapped;
+                    }
                 }
             }
             const districtType = this.getProjectDistrictType(type);
@@ -7662,6 +8162,13 @@
                 y = clamp(anchor.y - bearing.x * side * 26 + (this.rng() - 0.5) * 10, 50, this.height - 50);
             }
             const snapped = this.snapProjectSiteToGrid(type, x, y || baseY);
+            if (!this.isProjectSiteWithinWorkingRange(type, snapped.x, snapped.y)) {
+                const nearbyCamp = this.snapProjectSiteToGrid(type,
+                    clamp(this.camp.x + (this.rng() - 0.5) * 56, 50, this.width - 50),
+                    clamp(this.camp.y + (this.rng() - 0.5) * 56, 50, this.height - 50)
+                );
+                return this.findOpenProjectSite(type, nearbyCamp) || nearbyCamp;
+            }
             return this.findOpenProjectSite(type, snapped) || snapped;
         }
 
@@ -7780,7 +8287,25 @@
             return BUILDING_FOOTPRINTS[type] || 30;
         }
 
+        getWorkingSiteRadius(type) {
+            if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
+                return 210;
+            }
+            return Infinity;
+        }
+
+        isProjectSiteWithinWorkingRange(type, x, y) {
+            const maxDistance = this.getWorkingSiteRadius(type);
+            if (!Number.isFinite(maxDistance)) {
+                return true;
+            }
+            return distance({ x, y }, this.camp) <= maxDistance;
+        }
+
         isProjectSiteOpen(type, x, y, options = {}) {
+            if (!this.isProjectSiteWithinWorkingRange(type, x, y)) {
+                return false;
+            }
             const radius = this.getPlacementRadius(type);
             const ignoreProjectId = options.ignoreProjectId || null;
             const ignoreBuildingId = options.ignoreBuildingId || null;
@@ -8068,20 +8593,22 @@
 
         updateBuildings(dt) {
             const weather = this.getWeather();
+            const weatherState = this.getWeatherState();
             const irrigationBoost = 1 + this.countBuildings('irrigation') * 0.18 + this.countBuildings('canal') * 0.26;
             const engineeredFarmBoost = 1 + this.countBuildings('engineeredFarm') * 0.12;
             const disasterKnob = this.getSimulationKnob('disasterFrequency');
             this.structureRaidCooldown = Math.max(0, this.structureRaidCooldown - dt * disasterKnob);
             this.weatherDamageCooldown = Math.max(0, this.weatherDamageCooldown - dt * disasterKnob);
+            this.lightningStrikeCooldown = Math.max(0, this.lightningStrikeCooldown - dt * disasterKnob);
             for (const building of this.buildings) {
                 building.storageOpenTtl = Math.max(0, (building.storageOpenTtl || 0) - dt);
                 if (!building.maxIntegrity) {
                     building.maxIntegrity = BUILDING_DEFS[building.type]?.durability || 30;
                     building.integrity = building.integrity || building.maxIntegrity;
                 }
-                const baseDecay = dt * 0.0025;
-                const stormDecay = weather.name === 'Storm' ? dt * 0.035 : weather.name === 'Cold Snap' ? dt * 0.012 : 0;
-                const exposedPenalty = (building.type === 'leanTo' || building.type === 'storagePit' || building.type === 'farmPlot') ? dt * 0.006 : 0;
+                const baseDecay = dt * 0.0011;
+                const stormDecay = weather.name === 'Storm' ? dt * 0.008 : weather.name === 'Cold Snap' ? dt * 0.0035 : 0;
+                const exposedPenalty = (building.type === 'leanTo' || building.type === 'storagePit' || building.type === 'farmPlot') ? dt * 0.0022 : 0;
                 building.integrity = clamp(building.integrity - baseDecay - stormDecay - exposedPenalty, 0, building.maxIntegrity);
                 if (building.type !== 'farmPlot' && building.type !== 'engineeredFarm') {
                     continue;
@@ -8102,14 +8629,20 @@
             }
             if (weather.name === 'Storm' && this.weatherDamageCooldown <= 0) {
                 const fragile = this.buildings
-                    .filter((building) => this.getBuildingIntegrityRatio(building) < 0.72)
+                    .filter((building) => this.getBuildingIntegrityRatio(building) < 0.54)
                     .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))[0];
                 if (fragile) {
-                    this.applyBuildingDamage(fragile, 1.4);
+                    this.applyBuildingDamage(fragile, 0.75);
                     this.pushEvent(`A storm battered the ${fragile.type}.`);
-                    this.weatherDamageCooldown = 14;
+                    this.weatherDamageCooldown = 22;
                 }
             }
+            if (weatherState.lightningFlash > this.lastResolvedLightningFlash + 0.18 && this.lightningStrikeCooldown <= 0) {
+                if (this.resolveLightningStrike(weatherState)) {
+                    this.lightningStrikeCooldown = 16 + this.rng() * 12;
+                }
+            }
+            this.lastResolvedLightningFlash = weatherState.lightningFlash;
             const defensiveCover = this.countBuildings('watchtower') + this.countBuildings('wall') + this.countBuildings('fortifiedStructure') + this.countBuildings('stoneKeep') * 2;
             if (this.predators.length > 0 && defensiveCover < 2 && this.structureRaidCooldown <= 0 && !this.hasProtectColonyBubble()) {
                 const vulnerable = this.buildings.find((building) =>
@@ -8118,12 +8651,12 @@
                     building.type === 'campfire' ||
                     building.type === 'leanTo'
                 ) || null;
-                if (vulnerable && this.rng() < 0.004 + Math.max(0, this.predators.length - defensiveCover) * 0.0015) {
-                    vulnerable.integrity = clamp(vulnerable.integrity - 1.8, 0, vulnerable.maxIntegrity);
-                    this.camp.food = Math.max(0, this.camp.food - 1.8);
-                    this.camp.wood = Math.max(0, this.camp.wood - 0.6);
+                if (vulnerable && this.rng() < (0.0022 + Math.max(0, this.predators.length - defensiveCover) * 0.0009) * dt) {
+                    this.applyBuildingDamage(vulnerable, 0.85);
+                    this.camp.food = Math.max(0, this.camp.food - 0.9);
+                    this.camp.wood = Math.max(0, this.camp.wood - 0.3);
                     this.pushEvent(`Predators raided the ${vulnerable.type} and spoiled stored supplies.`);
-                    this.structureRaidCooldown = 20;
+                    this.structureRaidCooldown = 34;
                 }
             }
         }
@@ -8457,7 +8990,13 @@
 
         findPlantingSpot() {
             const fertileCell = this.cells
-                .filter((cell) => cell.biome === 'fertile')
+                .filter((cell) =>
+                    cell.biome === 'fertile' &&
+                    distance(
+                        { x: cell.x + CELL_WIDTH * 0.5, y: cell.y + CELL_HEIGHT * 0.5 },
+                        this.camp
+                    ) <= this.getWorkingSiteRadius('farmPlot')
+                )
                 .sort((a, b) =>
                     distance({ x: a.x + CELL_WIDTH * 0.5, y: a.y + CELL_HEIGHT * 0.5 }, this.camp) -
                     distance({ x: b.x + CELL_WIDTH * 0.5, y: b.y + CELL_HEIGHT * 0.5 }, this.camp)
@@ -8666,22 +9205,24 @@
             if (cell.biome === 'valley') {
                 return Infinity;
             }
+            const weatherPenalty = this.getWeatherStateAt(cell.x + CELL_WIDTH * 0.5, cell.y + CELL_HEIGHT * 0.5).movementPenalty;
             if (cell.terrain?.marsh && !cell.terrain?.drained) {
-                return 2.4;
+                return 2.4 + weatherPenalty * 1.25;
             }
             if (cell.terrain?.fortified) {
-                return 2.2;
+                return 2.2 + weatherPenalty * 0.8;
             }
             if (cell.biome === 'rocky') {
-                return cell.terrain?.quarried ? 2.2 : 2.8;
+                return (cell.terrain?.quarried ? 2.2 : 2.8) + weatherPenalty * 0.7;
             }
             if (cell.biome === 'forest') {
-                return 1.7;
+                return 1.7 + weatherPenalty;
             }
             if (cell.biome === 'fertile') {
-                return cell.terrain?.terraced ? 1 : 1.1;
+                const base = cell.terrain?.terraced ? 1 : 1.1;
+                return base + weatherPenalty * 0.9;
             }
-            return 1;
+            return 1 + weatherPenalty * 1.1;
         }
 
         getPathDangerCost(col, row, origin) {
@@ -8857,7 +9398,7 @@
             const defenders = nearby.filter((entry) =>
                 entry.stats.health >= (58 + predatorCaution * 6) &&
                 entry.stats.energy >= (40 + predatorCaution * 4) &&
-                distance(entry, this.camp) < 130
+                distance(entry, this.camp) < this.getWeatherVisibilityRadius(entry, 130)
             );
             return defenders.slice(0, predatorCaution > 0 ? 1 : 2).includes(colonist);
         }
@@ -8867,8 +9408,8 @@
                 return false;
             }
             const predatorCaution = this.getPredatorCaution();
-            const immediateFleeRadius = 48 + predatorCaution * 18;
-            const broadFleeRadius = 88 + predatorCaution * 22;
+            const immediateFleeRadius = this.getWeatherVisibilityRadius(colonist, 48 + predatorCaution * 18);
+            const broadFleeRadius = this.getWeatherVisibilityRadius(colonist, 88 + predatorCaution * 22);
             if (colonist.threatDistance < immediateFleeRadius) {
                 return true;
             }
@@ -9084,20 +9625,64 @@
                     continue;
                 }
                 const nextDistance = distance(origin, colonist);
-                if (nextDistance < bestDistance) {
+                const stealthAdjustedDistance = nextDistance / Math.max(0.55, this.getWeatherStealthFactor(colonist));
+                if (stealthAdjustedDistance < bestDistance) {
                     best = colonist;
-                    bestDistance = nextDistance;
+                    bestDistance = stealthAdjustedDistance;
                 }
             }
             return best;
+        }
+
+        getMovementSpeedMultiplierAt(x, y, options = {}) {
+            const weather = this.getWeatherStateAt(x, y, options);
+            const cell = this.getCellAt(x, y);
+            const roadRelief = Math.max(cell?.terrain?.pathWear || 0, (cell?.terrain?.roadLevel || 0) * 1.15);
+            const relief = clamp(roadRelief * 0.28, 0, 0.18);
+            return clamp(1 - weather.movementPenalty + relief, 0.58, 1.05);
+        }
+
+        getWeatherVisibilityRadius(origin, baseRadius, options = {}) {
+            const weather = this.getWeatherStateAt(origin.x, origin.y, options);
+            return Math.max(28, baseRadius * weather.visibility);
+        }
+
+        getWeatherStealthFactor(origin, options = {}) {
+            const weather = this.getWeatherStateAt(origin.x, origin.y, options);
+            return 1 - weather.stealthBonus;
         }
 
         getSeason() {
             return SEASONS[this.seasonIndex];
         }
 
-        getWeather() {
+        getWeatherPreset() {
             return this.forcedWeather || WEATHER_TYPES[this.weatherIndex];
+        }
+
+        getWeather() {
+            const preset = this.getWeatherPreset();
+            const state = this.weatherManager?.getGlobalState();
+            return state
+                ? {
+                    ...preset,
+                    intensity: Number(state.intensity.toFixed(2)),
+                    windX: Number(state.windX.toFixed(2)),
+                    windY: Number(state.windY.toFixed(2)),
+                    darkness: Number(state.darkness.toFixed(2)),
+                    fogDensity: Number(state.fogDensity.toFixed(2)),
+                    precipitationIntensity: Number(state.precipitationIntensity.toFixed(2)),
+                    transition: Number(state.transition.toFixed(2))
+                }
+                : preset;
+        }
+
+        getWeatherState() {
+            return this.weatherManager.getGlobalState();
+        }
+
+        getWeatherStateAt(x, y, options = {}) {
+            return this.weatherManager.getStateAt(x, y, options);
         }
 
         pickWeather() {
@@ -9984,6 +10569,9 @@
             if (colonist.lastDamageCause === 'predatorAttack') {
                 return 'predatorAttack';
             }
+            if (colonist.lastDamageCause === 'lightningStrike') {
+                return 'lightningStrike';
+            }
             const stats = colonist.stats;
             const lowest = Math.min(stats.hunger, stats.thirst, stats.warmth, stats.energy);
             switch (lowest) {
@@ -10005,6 +10593,7 @@
                 case 'exposure': return 'Cold nights punish weak shelter and low fire fuel.';
                 case 'exhaustion': return 'Rest has to happen before collapse sets in.';
                 case 'predatorAttack': return 'Predators force distance, fear, and retreat.';
+                case 'lightningStrike': return 'Storms punish exposed ground and weak shelter.';
                 default: return 'The colony needs better survival habits.';
             }
         }
@@ -10123,6 +10712,7 @@
                     weatherTimer: this.weatherTimer,
                     weatherDuration: this.weatherDuration,
                     forcedWeather: this.forcedWeather,
+                    weatherManager: this.weatherManager.exportState(),
                     simulationSpeed: this.simulationSpeed,
                     paused: this.paused,
                     generation: this.generation,
@@ -10146,6 +10736,8 @@
                     structureRaidCooldown: this.structureRaidCooldown,
                     mainAttackCooldown: this.mainAttackCooldown,
                     weatherDamageCooldown: this.weatherDamageCooldown,
+                    lightningStrikeCooldown: this.lightningStrikeCooldown,
+                    lastResolvedLightningFlash: this.lastResolvedLightningFlash,
                     usedNames: Array.from(this.usedNames || []),
                     borderIncidents: clone(this.borderIncidents),
                     factionEvents: clone(this.factionEvents),
@@ -10195,6 +10787,7 @@
             this.weatherTimer = state.weatherTimer ?? 55;
             this.weatherDuration = state.weatherDuration ?? this.weatherTimer;
             this.forcedWeather = state.forcedWeather ?? null;
+            this.weatherManager = new WeatherManager(this, state.weatherManager || null);
             this.simulationSpeed = state.simulationSpeed ?? 1;
             this.paused = Boolean(state.paused);
             this.generation = state.generation ?? this.generation;
@@ -10236,6 +10829,8 @@
             this.structureRaidCooldown = state.structureRaidCooldown ?? 0;
             this.mainAttackCooldown = state.mainAttackCooldown ?? 30;
             this.weatherDamageCooldown = state.weatherDamageCooldown ?? 0;
+            this.lightningStrikeCooldown = state.lightningStrikeCooldown ?? 0;
+            this.lastResolvedLightningFlash = state.lastResolvedLightningFlash ?? 0;
             this.usedNames = new Set(state.usedNames || []);
             this.borderIncidents = clone(state.borderIncidents || []);
             this.factionEvents = clone(state.factionEvents || []);
@@ -10783,6 +11378,64 @@
             this.pushEvent(`${colonist.name} joined the colony.`);
         }
 
+        sendAidToSelectedDaughterColony() {
+            const target = this.selectedEntity;
+            if (!target || target.entityType !== 'colony' || target.type !== 'daughter') {
+                this.pushEvent('Select a daughter colony to send aid.');
+                return false;
+            }
+            const food = Math.min(5, Math.max(0, this.camp.food - 12));
+            const water = Math.min(4, Math.max(0, this.camp.water - 10));
+            const wood = Math.min(3, Math.max(0, this.camp.wood - 10));
+            if (food <= 0 && water <= 0 && wood <= 0) {
+                this.pushEvent('The main colony lacks spare supplies to send.');
+                return false;
+            }
+            this.camp.food = Math.max(0, this.camp.food - food);
+            this.camp.water = Math.max(0, this.camp.water - water);
+            this.camp.wood = Math.max(0, this.camp.wood - wood);
+            this.spawnFactionParty(target, 'aid', 'fromCamp', {
+                target,
+                targetKind: 'colony',
+                targetColonyId: target.id,
+                supportMode: 'main aid',
+                status: 'supply caravan',
+                effectLabel: 'Aid',
+                strength: 1.6,
+                supplies: { food, water, wood }
+            });
+            target.supportCooldown = this.getColonySupportCooldownDuration(target, 20, 62);
+            target.recentAction = 'receiving aid';
+            this.pushEvent(`The main colony sent aid toward ${target.name}.`);
+            return true;
+        }
+
+        healSelectedUnit() {
+            const target = this.selectedEntity;
+            if (target?.entityType === 'colonist') {
+                target.stats.health = clamp(target.stats.health + 28, 0, 100);
+                target.stats.morale = clamp(target.stats.morale + 10, 0, 100);
+                target.stats.energy = clamp(target.stats.energy + 12, 0, 100);
+                target.woundSeverity = clamp((target.woundSeverity || 0) - 0.22, 0, 1);
+                target.woundCount = Math.max(0, (target.woundCount || 0) - 1);
+                this.pushEvent(`${target.name} was restored by divine healing.`);
+                return true;
+            }
+            if (target?.entityType === 'building') {
+                target.integrity = Math.min(target.maxIntegrity || target.integrity || 1, (target.integrity || 0) + Math.max(1.5, (target.maxIntegrity || 0) * 0.18));
+                this.pushEvent(`The ${target.type} was mended by divine healing.`);
+                return true;
+            }
+            for (const colonist of this.colonists) {
+                if (!colonist.alive) {
+                    continue;
+                }
+                colonist.stats.health = clamp(colonist.stats.health + 8, 0, 100);
+            }
+            this.pushEvent('A divine healing wave passed through the colony.');
+            return true;
+        }
+
         instillFearKnowledgeOnSelectedColonist() {
             const colonist = this.selectedEntity;
             if (!colonist || colonist.type || colonist === this.camp || !colonist.alive) {
@@ -10823,17 +11476,19 @@
         }
 
         applyWeather(name) {
-            const match = WEATHER_TYPES.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+            const match = WEATHER_TYPE_LOOKUP[name.toLowerCase()];
             if (!match) {
                 return;
             }
             this.forcedWeather = match;
             this.weatherTimer = this.weatherDuration;
+            this.weatherManager.syncToCurrent(false);
             this.pushEvent(`Weather forced to ${match.name}.`);
         }
 
         clearForcedWeather() {
             this.forcedWeather = null;
+            this.weatherManager.syncToCurrent(false);
             this.pushEvent('Weather returned to seasonal drift.');
         }
 
@@ -10863,6 +11518,11 @@
                 this.selectedEntity = resource;
                 return resource;
             }
+            const colony = this.branchColonies.find((entry) => distance(entry, { x, y }) < 28);
+            if (colony) {
+                this.selectedEntity = colony;
+                return colony;
+            }
             if (distance(this.camp, { x, y }) < 28) {
                 this.selectedEntity = this.camp;
                 return this.camp;
@@ -10890,6 +11550,7 @@
         getSummaryText() {
             const averages = this.getAverages();
             const temperature = this.getTemperatureAt(this.camp.x, this.camp.y);
+            const weatherState = this.getWeatherState();
             const taskAllocation = { farmers: 0, builders: 0, gatherers: 0, hunters: 0, crafters: 0 };
             for (const colonist of this.colonists) {
                 const role = this.getSoftRole(colonist);
@@ -10919,6 +11580,24 @@
                 day: this.day,
                 season: this.getSeason().name,
                 weather: this.getWeather().name,
+                weatherState: {
+                    intensity: Number(weatherState.intensity.toFixed(2)),
+                    windX: Number(weatherState.windX.toFixed(2)),
+                    windY: Number(weatherState.windY.toFixed(2)),
+                    gustStrength: Number((weatherState.gustStrength || 0).toFixed(2)),
+                    darkness: Number(weatherState.darkness.toFixed(2)),
+                    fogDensity: Number(weatherState.fogDensity.toFixed(2)),
+                    transition: Number(weatherState.transition.toFixed(2)),
+                    visibility: Number(weatherState.visibility.toFixed(2)),
+                    movementPenalty: Number(weatherState.movementPenalty.toFixed(2)),
+                    stealthBonus: Number(weatherState.stealthBonus.toFixed(2)),
+                    lightningRisk: Number(weatherState.lightningRisk.toFixed(2)),
+                    surfaceWetness: Number(weatherState.surfaceWetness.toFixed(2)),
+                    puddleLevel: Number(weatherState.puddleLevel.toFixed(2)),
+                    snowCover: Number(weatherState.snowCover.toFixed(2)),
+                    lightningFlash: Number(weatherState.lightningFlash.toFixed(2)),
+                    ambientProfile: weatherState.ambientProfile
+                },
                 lightLevel: Number(this.getLightLevel().toFixed(2)),
                 temperatureAtCamp: Number(temperature.toFixed(1)),
                 population: this.colonists.length,

@@ -8,7 +8,7 @@
         frameHeight: 128,
         drawWidth: 128,
         drawHeight: 128,
-        roofSourceY: 648,
+        roofSourceY: 650,
         frames: {
             crop: [0, 1, 2, 3],
             hutBase: 4,
@@ -104,6 +104,7 @@
             this.colonistSprite = null;
             this.colonistSpriteReady = false;
             this.colonistSpriteState = new Map();
+            this.weatherPatternCache = new Map();
             this.loadStructureSprite();
             this.loadFoodStorageSprite();
             this.loadColonistSprite();
@@ -197,6 +198,74 @@
                 width: halfWidth * 2,
                 height: halfHeight * 2
             };
+        }
+
+        snapPixel(value, size = 1) {
+            return Math.round(value / size) * size;
+        }
+
+        withPixelatedImages(ctx, fn) {
+            const prev = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            try {
+                fn();
+            } finally {
+                ctx.imageSmoothingEnabled = prev;
+            }
+        }
+
+        getWeatherPatternCanvas(kind, variant = 0) {
+            const key = `${kind}:${variant}`;
+            if (this.weatherPatternCache.has(key)) {
+                return this.weatherPatternCache.get(key);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const seed = kind.length * 17 + variant * 29;
+            const colors = kind === 'fog'
+                ? ['rgba(224,232,238,0.75)', 'rgba(210,220,228,0.65)', 'rgba(198,208,216,0.55)']
+                : ['rgba(207,169,101,0.72)', 'rgba(188,144,82,0.58)', 'rgba(165,122,67,0.46)'];
+            const count = kind === 'fog' ? 24 : 18;
+            for (let i = 0; i < count; i++) {
+                const px = (seed * (i + 3) * 7) % 58;
+                const py = (seed * (i + 5) * 11) % 58;
+                const w = 6 + ((seed + i * 3) % (kind === 'fog' ? 12 : 8));
+                const h = 3 + ((seed + i * 5) % (kind === 'fog' ? 7 : 4));
+                ctx.fillStyle = colors[i % colors.length];
+                ctx.fillRect(px, py, w, h);
+                if (kind === 'fog' && i % 3 === 0) {
+                    ctx.fillRect(Math.max(0, px - 3), py + 1, Math.max(2, w - 4), Math.max(2, h - 1));
+                }
+            }
+            this.weatherPatternCache.set(key, canvas);
+            return canvas;
+        }
+
+        drawPixelWeatherSheet(ctx, kind, options) {
+            const {
+                x,
+                y,
+                width,
+                height,
+                alpha = 0.2,
+                variant = 0
+            } = options;
+            const pattern = this.getWeatherPatternCanvas(kind, variant);
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            this.withPixelatedImages(ctx, () => {
+                ctx.drawImage(
+                    pattern,
+                    this.snapPixel(x, 2),
+                    this.snapPixel(y, 2),
+                    this.snapPixel(width, 2),
+                    this.snapPixel(height, 2)
+                );
+            });
+            ctx.restore();
         }
 
         getEraArtDirection() {
@@ -441,6 +510,7 @@
             ctx.translate(-this.cameraX + halfWidth, -this.cameraY + halfHeight);
             this.drawTerrain(ctx);
             this.drawEraBackdrop(ctx);
+            this.drawWeatherGroundResponse(ctx);
             this.drawLandUse(ctx);
             this.drawGroundStructures(ctx);
             this.drawResources(ctx);
@@ -448,6 +518,7 @@
             this.drawCamp(ctx);
             this.drawColonists(ctx);
             this.drawBuildingRoofOverlays(ctx);
+            this.drawWeatherNearGround(ctx);
             this.drawWeather(ctx);
             this.drawLighting(ctx);
             ctx.restore();
@@ -1087,6 +1158,11 @@
                             : 'rgba(245, 232, 176, 0.85)';
                 ctx.lineWidth = 1.4;
                 ctx.strokeRect(colony.x - 22, colony.y - 10, 44, 30);
+                if (this.world.selectedEntity === colony) {
+                    ctx.strokeStyle = 'rgba(255, 245, 188, 0.96)';
+                    ctx.lineWidth = 2.2;
+                    ctx.strokeRect(colony.x - 26, colony.y - 14, 52, 38);
+                }
                 if (colony.campaign?.state === 'active') {
                     ctx.strokeStyle = diplomacy === 'allied' ? 'rgba(123, 220, 216, 0.95)' : 'rgba(221, 106, 91, 0.95)';
                     ctx.lineWidth = 2;
@@ -1110,6 +1186,7 @@
                     ctx.closePath();
                     ctx.fill();
                 }
+                this.drawBranchColonySettlers(ctx, colony);
             }
             this.drawFactionEffects(ctx);
             this.drawFactionParties(ctx);
@@ -1328,6 +1405,31 @@
             }
         }
 
+        drawBranchColonySettlers(ctx, colony) {
+            const count = Math.max(2, Math.min(4, Math.round(colony.population || 2)));
+            for (let i = 0; i < count; i += 1) {
+                const pseudo = {
+                    id: `${colony.id}:settler:${i}`,
+                    x: colony.x + Math.cos(i * 2.2 + colony.id) * (12 + (i % 2) * 5),
+                    y: colony.y + 10 + Math.sin(i * 2.2 + colony.id * 0.7) * (8 + (i % 2) * 4),
+                    state: 'moving',
+                    vx: Math.cos(i * 1.3 + colony.id) * 12,
+                    vy: Math.sin(i * 1.1 + colony.id) * 10,
+                    intent: i % 3 === 0 ? 'haulWater' : i % 2 === 0 ? 'forage' : 'build',
+                    assignedBattlefrontId: null,
+                    battleRole: null,
+                    lastBattleHitTtl: 0,
+                    woundSeverity: 0,
+                    woundCount: 0,
+                    threat: null,
+                    threatDistance: 999
+                };
+                if (!this.drawColonistSprite(ctx, pseudo)) {
+                    this.drawFactionPartyMember(ctx, { type: 'aid', id: `fallback:${colony.id}:${i}` }, pseudo.x, pseudo.y, '#cbb68a', i === 0);
+                }
+            }
+        }
+
         drawFactionEffects(ctx) {
             for (const effect of this.world.factionEffects || []) {
                 if (!Number.isFinite(effect.x) || !Number.isFinite(effect.y)) {
@@ -1364,6 +1466,39 @@
         }
 
         drawFactionPartyMember(ctx, party, x, y, color, leader) {
+            const dx = party.targetX - party.startX;
+            const dy = party.targetY - party.startY;
+            const pseudo = {
+                id: `${party.id}:member:${leader ? 'leader' : `${Math.round(x)}:${Math.round(y)}`}`,
+                x,
+                y,
+                state: 'moving',
+                vx: dx * 0.4,
+                vy: dy * 0.4,
+                intent: party.type === 'aid'
+                    ? 'haulWater'
+                    : party.type === 'trade'
+                        ? 'process'
+                        : party.type === 'raid'
+                            ? 'war'
+                            : party.type === 'knowledge'
+                                ? 'socialize'
+                                : 'flee',
+                assignedBattlefrontId: party.type === 'raid' ? party.id : null,
+                battleRole: party.type === 'raid' ? 'frontline' : null,
+                lastBattleHitTtl: 0,
+                woundSeverity: 0,
+                woundCount: 0,
+                threat: null,
+                threatDistance: 999
+            };
+            if (this.drawColonistSprite(ctx, pseudo)) {
+                if (party.type === 'trade' || party.type === 'aid') {
+                    ctx.fillStyle = 'rgba(101, 77, 56, 0.9)';
+                    ctx.fillRect(x - 3, y + 6, 6, 4);
+                }
+                return;
+            }
             const bodyColor = party.type === 'raid' ? '#7f3c34' : color;
             const accent = party.type === 'aid'
                 ? '#d7f3f0'
@@ -1896,24 +2031,52 @@
         }
 
         drawBuildingRoofOverlays(ctx) {
+            const weatherState = this.world.getWeatherState();
             for (const building of this.world.buildings) {
-                if (building.type !== 'hut') {
-                    continue;
+                let drewRoofSprite = false;
+                if (building.type === 'hut') {
+                    drewRoofSprite = this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutRoof, {
+                        yOffset: -CELL_HEIGHT * 2,
+                        drawWidth: CELL_WIDTH * 2,
+                        drawHeight: CELL_HEIGHT * 2,
+                        sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY,
+                        sourceHeight: 128
+                    });
+                    if (!drewRoofSprite) {
+                        continue;
+                    }
                 }
-                if (!this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutRoof, {
-                    yOffset: -CELL_HEIGHT * 2,
-                    drawWidth: CELL_WIDTH * 2,
-                    drawHeight: CELL_HEIGHT * 2,
-                    sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY,
-                    sourceHeight: 128
-                })) {
-                    continue;
+
+                const roofedTypes = new Set(['hut', 'cottage', 'house', 'warehouse', 'granary', 'kitchen', 'foodHall', 'civicComplex']);
+                if (roofedTypes.has(building.type) && (weatherState.surfaceWetness > 0.08 || weatherState.precipitationType === 'snow')) {
+                    const rect = this.getBuildingSelectionRect(building);
+                    const roofTop = this.snapPixel(rect.y - Math.min(8, Math.max(4, rect.height * 0.22)), 2);
+                    const roofLeft = this.snapPixel(rect.x, 2);
+                    const roofWidth = this.snapPixel(rect.width, 2);
+                    if (weatherState.precipitationType === 'snow' && weatherState.snowCover > 0.08) {
+                        ctx.fillStyle = `rgba(242, 247, 252, ${0.18 + weatherState.snowCover * 0.22})`;
+                        ctx.fillRect(roofLeft, roofTop, roofWidth, 4);
+                    } else {
+                        ctx.fillStyle = `rgba(180, 206, 224, ${weatherState.surfaceWetness * 0.14})`;
+                        ctx.fillRect(roofLeft, roofTop, roofWidth, 2);
+                        ctx.fillStyle = `rgba(214, 230, 240, ${weatherState.surfaceWetness * 0.08})`;
+                        ctx.fillRect(roofLeft + 2, roofTop + 2, Math.max(2, roofWidth - 4), 2);
+                    }
+                    if (weatherState.precipitationType === 'rain' && weatherState.intensity > 0.34) {
+                        const dripCount = Math.min(4, Math.max(1, Math.floor(weatherState.intensity * 4)));
+                        ctx.fillStyle = `rgba(196, 224, 245, ${0.2 + weatherState.intensity * 0.16})`;
+                        for (let i = 0; i < dripCount; i++) {
+                            const dripX = roofLeft + 4 + i * Math.max(6, Math.floor((roofWidth - 8) / Math.max(1, dripCount)));
+                            const dripY = roofTop + 4 + ((i + building.id) % 2) * 2;
+                            ctx.fillRect(dripX, dripY, 2, 4 + (weatherState.type === 'Storm' ? 4 : 2));
+                        }
+                    }
                 }
                 if (this.world.selectedEntity === building) {
                     const rect = this.getBuildingSelectionRect(building);
                     ctx.strokeStyle = '#fff1a8';
                     ctx.lineWidth = 2;
-                    ctx.strokeRect(rect.x, rect.y - CELL_HEIGHT * 2, rect.width, rect.height + CELL_HEIGHT * 2);
+                    ctx.strokeRect(rect.x, rect.y - (building.type === 'hut' ? CELL_HEIGHT * 2 : 0), rect.width, rect.height + (building.type === 'hut' ? CELL_HEIGHT * 2 : 0));
                 }
             }
         }
@@ -2512,85 +2675,179 @@
             ctx.stroke();
         }
 
+        drawWeatherGroundResponse(ctx) {
+            const weatherState = this.world.getWeatherState();
+            if (weatherState.surfaceWetness <= 0.03 && weatherState.snowCover <= 0.03 && weatherState.puddleLevel <= 0.08) {
+                return;
+            }
+            for (const cell of this.world.cells) {
+                if (cell.biome === 'valley' || cell.biome === 'water') {
+                    continue;
+                }
+                const x = cell.x;
+                const y = cell.y;
+                const stateAtCell = this.world.getWeatherStateAt(x + CELL_WIDTH * 0.5, y + CELL_HEIGHT * 0.5);
+                if (stateAtCell.surfaceWetness > 0.05) {
+                    ctx.fillStyle = `rgba(22, 41, 56, ${0.08 + stateAtCell.surfaceWetness * 0.12})`;
+                    ctx.fillRect(x, y, CELL_WIDTH, CELL_HEIGHT);
+                }
+                if (stateAtCell.snowCover > 0.04) {
+                    ctx.fillStyle = `rgba(236, 243, 248, ${stateAtCell.snowCover * 0.3})`;
+                    ctx.fillRect(x, y, CELL_WIDTH, CELL_HEIGHT);
+                }
+                const lowSpot = !cell.terrain?.hill && !cell.terrain?.mountain && !cell.terrain?.fortified && !cell.terrain?.quarried;
+                if (lowSpot && stateAtCell.puddleLevel > 0.18 && (cell.col + cell.row) % 4 === 0) {
+                    const puddleX = this.snapPixel(x + CELL_WIDTH * (0.26 + (cell.col % 3) * 0.12), 2);
+                    const puddleY = this.snapPixel(y + CELL_HEIGHT * (0.58 - (cell.row % 2) * 0.08), 2);
+                    const puddleW = this.snapPixel(CELL_WIDTH * 0.34, 2);
+                    const puddleH = this.snapPixel(CELL_HEIGHT * 0.16, 2);
+                    ctx.fillStyle = `rgba(120, 168, 198, ${stateAtCell.puddleLevel * 0.18})`;
+                    ctx.fillRect(puddleX, puddleY, puddleW, puddleH);
+                    ctx.fillStyle = `rgba(198, 224, 239, ${stateAtCell.puddleLevel * 0.12})`;
+                    ctx.fillRect(puddleX + 2, puddleY + 2, Math.max(2, puddleW - 6), 2);
+                }
+            }
+        }
+
+        drawWeatherNearGround(ctx) {
+            const weatherState = this.world.getWeatherState();
+            if (weatherState.splashRate > 0.04) {
+                const transitionFade = 0.4 + weatherState.transition * 0.6;
+                ctx.fillStyle = `rgba(202, 231, 255, ${(0.08 + weatherState.splashRate * 0.14) * transitionFade})`;
+                const splashCount = Math.round((8 + weatherState.splashRate * 20) * transitionFade);
+                for (let i = 0; i < splashCount; i++) {
+                    const x = this.snapPixel((i * 151 + this.world.elapsed * (70 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
+                    const y = this.snapPixel((i * 89 + this.world.elapsed * (90 + weatherState.intensity * 70)) % WORLD_HEIGHT, 2);
+                    ctx.fillRect(x, y, 4, 2);
+                    ctx.fillRect(x + 2, y - 2, 2, 6);
+                }
+            }
+            if (weatherState.leafDrift > 0.08) {
+                const driftCount = Math.round(10 + weatherState.leafDrift * 18);
+                ctx.fillStyle = weatherState.type === 'Cold Snap'
+                    ? 'rgba(239, 245, 251, 0.52)'
+                    : 'rgba(173, 145, 92, 0.3)';
+                for (let i = 0; i < driftCount; i++) {
+                    const sway = Math.sin(this.world.elapsed * 0.9 + i) * 12;
+                    const x = this.snapPixel((i * 133 + this.world.elapsed * (35 + weatherState.windX * 45) + sway) % WORLD_WIDTH, 2);
+                    const y = this.snapPixel((i * 81 + this.world.elapsed * (26 + weatherState.windY * 52)) % WORLD_HEIGHT, 2);
+                    ctx.fillRect(x, y, 4, 2);
+                    ctx.fillRect(x + ((i % 2) ? 2 : 0), y + 2, 2, 2);
+                }
+            }
+        }
+
         drawWeather(ctx) {
-            const weather = this.world.getWeather().name;
+            const weatherState = this.world.getWeatherState();
             const zoomOut = this.getZoomOutFactor();
-            if (weather === 'Cloudy' || weather === 'Rain' || weather === 'Storm') {
-                const cloudAlpha = weather === 'Storm'
-                    ? 0.16 + zoomOut * 0.18
-                    : weather === 'Rain'
-                        ? 0.13 + zoomOut * 0.16
-                        : 0.1 + zoomOut * 0.22;
-                const cloudCount = Math.round((weather === 'Cloudy' ? 12 : 10) + zoomOut * (weather === 'Cloudy' ? 34 : 20));
-                const cloudColor = weather === 'Storm'
-                    ? `rgba(91, 104, 122, ${cloudAlpha})`
-                    : weather === 'Rain'
-                        ? `rgba(146, 161, 176, ${cloudAlpha})`
-                        : `rgba(184, 196, 206, ${cloudAlpha})`;
-                ctx.fillStyle = cloudColor;
-                for (let i = 0; i < cloudCount; i++) {
-                    const baseX = (i * 173 + this.world.elapsed * (weather === 'Cloudy' ? 7 : 12)) % (WORLD_WIDTH + 220) - 110;
-                    const baseY = 40 + ((i * 97) % Math.max(120, WORLD_HEIGHT - 160));
-                    const width = 120 + (i % 5) * 22 + zoomOut * 90;
-                    const height = 38 + (i % 3) * 10 + zoomOut * 20;
+            const densityScale = 1 - zoomOut * 0.22;
+            const gustStrength = weatherState.gustStrength || 0;
+            const transitionFade = 0.35 + weatherState.transition * 0.65;
+            if (weatherState.fogDensity > 0.04 || weatherState.type === 'Cloudy' || weatherState.type === 'Rain' || weatherState.type === 'Storm') {
+                const cloudAlpha = (0.04 + weatherState.fogDensity * 0.12 + weatherState.darkness * 0.16 + zoomOut * 0.05) * (0.8 + transitionFade * 0.2);
+                this.drawPixelWeatherSheet(ctx, 'fog', {
+                    x: ((this.world.elapsed * (5 + weatherState.windX * (5 + gustStrength * 4))) % (WORLD_WIDTH + 180)) - 140,
+                    y: 24,
+                    width: WORLD_WIDTH * (0.8 + zoomOut * 0.24),
+                    height: 180 + weatherState.fogDensity * 120,
+                    alpha: cloudAlpha,
+                    variant: weatherState.type === 'Storm' ? 1 : 0
+                });
+                this.drawPixelWeatherSheet(ctx, 'fog', {
+                    x: ((this.world.elapsed * (3 + weatherState.windX * (3 + gustStrength * 3))) + 210) % (WORLD_WIDTH + 220) - 180,
+                    y: 150 + Math.sin(this.world.elapsed * (0.05 + gustStrength * 0.02)) * (10 + gustStrength * 6),
+                    width: WORLD_WIDTH * 0.68,
+                    height: 150 + weatherState.fogDensity * 90,
+                    alpha: cloudAlpha * 0.8,
+                    variant: 2
+                });
+            }
+
+            if (weatherState.precipitationType === 'rain') {
+                ctx.strokeStyle = weatherState.type === 'Storm'
+                    ? `rgba(170, 205, 255, ${(0.2 + weatherState.intensity * 0.28) * transitionFade})`
+                    : `rgba(190, 226, 255, ${(0.16 + weatherState.intensity * 0.22) * transitionFade})`;
+                ctx.lineWidth = weatherState.type === 'Storm' ? 2 : 1;
+                const dropCount = Math.round((56 + weatherState.intensity * 132) * densityScale * transitionFade);
+                const dx = this.snapPixel(weatherState.windX * (12 + gustStrength * 8), 1);
+                const dy = this.snapPixel(10 + weatherState.intensity * 8 + Math.abs(weatherState.windY) * 3 + gustStrength * 2, 1);
+                for (let i = 0; i < dropCount; i++) {
+                    const x = this.snapPixel((i * 97 + this.world.elapsed * (180 + weatherState.intensity * 120)) % WORLD_WIDTH, 2);
+                    const y = this.snapPixel((i * 57 + this.world.elapsed * (240 + weatherState.intensity * 150)) % WORLD_HEIGHT, 2);
                     ctx.beginPath();
-                    ctx.ellipse(baseX, baseY, width * 0.34, height * 0.26, 0, 0, Math.PI * 2);
-                    ctx.ellipse(baseX + width * 0.18, baseY - 8, width * 0.26, height * 0.24, 0, 0, Math.PI * 2);
-                    ctx.ellipse(baseX - width * 0.2, baseY + 4, width * 0.22, height * 0.2, 0, 0, Math.PI * 2);
-                    ctx.fill();
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x - dx, y + dy);
+                    ctx.stroke();
+                }
+                if (weatherState.intensity > 0.42) {
+                    ctx.fillStyle = weatherState.type === 'Storm'
+                        ? `rgba(212, 234, 255, ${(0.16 + weatherState.intensity * 0.14) * transitionFade})`
+                        : `rgba(206, 231, 248, ${(0.12 + weatherState.intensity * 0.12) * transitionFade})`;
+                    const clusterCount = Math.round((10 + weatherState.intensity * 20) * densityScale * transitionFade);
+                    for (let i = 0; i < clusterCount; i++) {
+                        const x = this.snapPixel((i * 73 + this.world.elapsed * (132 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
+                        const y = this.snapPixel((i * 49 + this.world.elapsed * (180 + weatherState.intensity * 120)) % WORLD_HEIGHT, 2);
+                        ctx.fillRect(x, y, 2, 8);
+                        if (weatherState.type === 'Storm' && i % 3 === 0) {
+                            ctx.fillRect(x - 2, y + 2, 2, 6);
+                        }
+                    }
+                }
+            } else if (weatherState.precipitationType === 'snow') {
+                ctx.fillStyle = `rgba(240, 247, 255, ${(0.22 + weatherState.intensity * 0.22) * transitionFade})`;
+                const flakeCount = Math.round((32 + weatherState.intensity * 64) * densityScale * transitionFade);
+                for (let i = 0; i < flakeCount; i++) {
+                    const drift = Math.sin(this.world.elapsed * (0.7 + gustStrength * 0.08) + i * 0.3) * (8 + gustStrength * 5) + weatherState.windX * (12 + gustStrength * 8);
+                    const x = this.snapPixel((i * 71 + this.world.elapsed * 28 + drift) % WORLD_WIDTH, 2);
+                    const y = this.snapPixel((i * 63 + this.world.elapsed * (18 + weatherState.intensity * 16)) % WORLD_HEIGHT, 2);
+                    const size = i % 3 === 0 ? 4 : 2;
+                    ctx.fillRect(x, y, size, size);
+                    if (weatherState.intensity > 0.58 && i % 4 === 0) {
+                        ctx.fillRect(x + 2, y - 2, 2, 2);
+                    }
+                }
+            } else if (weatherState.precipitationType === 'dust') {
+                this.drawPixelWeatherSheet(ctx, 'dust', {
+                    x: ((this.world.elapsed * (10 + weatherState.windX * 8)) % (WORLD_WIDTH + 160)) - 100,
+                    y: 90,
+                    width: WORLD_WIDTH * 0.74,
+                    height: 120,
+                    alpha: 0.1 + weatherState.dustDensity * 0.14,
+                    variant: 1
+                });
+                ctx.fillStyle = `rgba(224, 181, 104, ${0.04 + weatherState.dustDensity * 0.1})`;
+                for (let i = 0; i < 12; i++) {
+                    const x = this.snapPixel((i * 143 + this.world.elapsed * 24) % WORLD_WIDTH, 4);
+                    const y = this.snapPixel((i * 81 + this.world.elapsed * 18) % WORLD_HEIGHT, 4);
+                    ctx.fillRect(x, y, 12 + (i % 3) * 4, 2);
                 }
             }
 
-            if (weather === 'Rain' || weather === 'Storm') {
-                ctx.strokeStyle = weather === 'Storm' ? 'rgba(170, 205, 255, 0.4)' : 'rgba(190, 226, 255, 0.3)';
-                ctx.lineWidth = weather === 'Storm' ? 2 : 1.2;
-                const dropCount = weather === 'Storm' ? 180 : 135;
-                for (let i = 0; i < dropCount; i++) {
-                    const x = (i * 97 + this.world.elapsed * (weather === 'Storm' ? 260 : 180)) % WORLD_WIDTH;
-                    const y = (i * 57 + this.world.elapsed * (weather === 'Storm' ? 340 : 260)) % WORLD_HEIGHT;
-                    ctx.beginPath();
-                    ctx.moveTo(x, y);
-                    ctx.lineTo(x - (weather === 'Storm' ? 8 : 6), y + (weather === 'Storm' ? 18 : 14));
-                    ctx.stroke();
-                }
-                ctx.fillStyle = weather === 'Storm' ? 'rgba(180, 218, 255, 0.22)' : 'rgba(190, 228, 255, 0.16)';
-                for (let i = 0; i < 42; i++) {
-                    const x = (i * 151 + this.world.elapsed * 110) % WORLD_WIDTH;
-                    const y = (i * 89 + this.world.elapsed * 130) % WORLD_HEIGHT;
-                    ctx.beginPath();
-                    ctx.ellipse(x, y, 4 + (i % 3), 1.6 + (i % 2), 0, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            } else if (weather === 'Cold Snap') {
-                ctx.fillStyle = 'rgba(230, 244, 255, 0.2)';
-                for (let i = 0; i < 80; i++) {
-                    const x = (i * 71 + this.world.elapsed * 42) % WORLD_WIDTH;
-                    const y = (i * 63 + this.world.elapsed * 28) % WORLD_HEIGHT;
-                    ctx.fillRect(x, y, 2, 2);
-                }
-            } else if (weather === 'Drought') {
-                ctx.strokeStyle = 'rgba(154, 107, 42, 0.26)';
-                for (let i = 0; i < 12; i++) {
-                    const x = 110 + ((i * 173) % (WORLD_WIDTH - 220));
-                    const y = 100 + ((i * 137) % (WORLD_HEIGHT - 200));
-                    ctx.beginPath();
-                    ctx.moveTo(x, y);
-                    ctx.lineTo(x + 12, y + 24);
-                    ctx.lineTo(x + 6, y + 16);
-                    ctx.stroke();
-                }
-                ctx.fillStyle = 'rgba(224, 181, 104, 0.08)';
-                for (let i = 0; i < 18; i++) {
-                    const x = (i * 143 + this.world.elapsed * 24) % WORLD_WIDTH;
-                    const y = (i * 81 + this.world.elapsed * 18) % WORLD_HEIGHT;
-                    ctx.fillRect(x, y, 28 + (i % 4) * 7, 2);
-                }
+            if (weatherState.fogDensity > 0.06) {
+                this.drawPixelWeatherSheet(ctx, 'fog', {
+                    x: ((this.world.elapsed * (2 + weatherState.windX * (2 + gustStrength * 2))) % (WORLD_WIDTH + 260)) - 180,
+                    y: WORLD_HEIGHT * 0.18,
+                    width: WORLD_WIDTH * 0.72,
+                    height: WORLD_HEIGHT * 0.18,
+                    alpha: weatherState.fogDensity * 0.12 * (0.84 + transitionFade * 0.16),
+                    variant: 3
+                });
+            }
+            if (weatherState.lightningFlash > 0.08) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${weatherState.lightningFlash * 0.14})`;
+                const flashX = this.snapPixel((WORLD_WIDTH * 0.24) + Math.sin(this.world.elapsed * 0.8) * 140, 2);
+                const flashY = this.snapPixel(40, 2);
+                ctx.fillRect(flashX, flashY, 4, 120);
+                ctx.fillRect(flashX - 4, flashY + 24, 8, 4);
+                ctx.fillRect(flashX + 2, flashY + 54, 4, 26);
+                ctx.fillRect(flashX - 6, flashY + 80, 10, 4);
             }
         }
 
         drawLighting(ctx) {
             const lightLevel = this.world.getLightLevel();
-            const darkness = clamp(1 - lightLevel, 0, 0.78);
+            const weatherState = this.world.getWeatherState();
+            const darkness = clamp(1 - lightLevel + weatherState.darkness * 0.48, 0, 0.84);
             if (darkness > 0.02) {
                 ctx.fillStyle = `rgba(9, 16, 34, ${darkness})`;
                 ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -2599,6 +2856,17 @@
             const weatherColor = this.world.getWeather().color;
             if (weatherColor) {
                 ctx.fillStyle = weatherColor;
+                ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+            }
+            if (weatherState.type === 'Drought') {
+                ctx.fillStyle = `rgba(194, 151, 88, ${weatherState.dustDensity * 0.14})`;
+                ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+            } else if (weatherState.type === 'Cold Snap') {
+                ctx.fillStyle = `rgba(220, 236, 255, ${weatherState.snowCover * 0.08})`;
+                ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+            }
+            if (weatherState.lightningFlash > 0.04) {
+                ctx.fillStyle = `rgba(240, 247, 255, ${weatherState.lightningFlash * 0.42})`;
                 ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
             }
 

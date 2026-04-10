@@ -97,12 +97,14 @@
                 'btn-god-focus': 'Focus View',
                 'btn-spawn-food': 'Spawn Berries',
                 'btn-spawn-water': 'Spawn Water',
+                'btn-spawn-colonist': 'Spawn Colonist',
+                'btn-aid-daughter': 'Aid Daughter',
                 'btn-bless-harvest': 'Bless Harvest',
                 'btn-lightning-strike': 'Lightning',
                 'btn-kill-creature': 'Instill Fear',
                 'btn-kill-unit': 'Kill Unit',
-                'btn-infect-creature': 'Cold Snap',
-                'btn-heal-creature': 'Clear Weather',
+                'btn-infect-creature': 'Spread Sickness',
+                'btn-heal-creature': 'Heal Selection',
                 'btn-cure-disease': 'Disease Cure',
                 'btn-disease-outbreak': 'Disease Outbreak',
                 'btn-inspire-learning': 'Inspire Learning',
@@ -165,12 +167,14 @@
                 'btn-god-focus': () => this.renderer.centerOn(this.world.camp.x, this.world.camp.y),
                 'btn-spawn-food': () => this.world.spawnFoodNearCamp(),
                 'btn-spawn-water': () => this.world.spawnWaterSourceNearSelection(),
+                'btn-spawn-colonist': () => this.world.addColonist(),
+                'btn-aid-daughter': () => this.world.sendAidToSelectedDaughterColony(),
                 'btn-bless-harvest': () => this.world.blessHarvest(),
                 'btn-lightning-strike': () => this.world.lightningStrikeSelected(),
                 'btn-kill-creature': () => this.world.instillFearKnowledgeOnSelectedColonist(),
                 'btn-kill-unit': () => this.world.killSelectedUnit(),
-                'btn-infect-creature': () => this.world.applyWeather('Cold Snap'),
-                'btn-heal-creature': () => this.world.clearForcedWeather(),
+                'btn-infect-creature': () => this.world.triggerDiseaseOutbreak(),
+                'btn-heal-creature': () => this.world.healSelectedUnit(),
                 'btn-cure-disease': () => this.world.cureDisease(),
                 'btn-disease-outbreak': () => this.world.triggerDiseaseOutbreak(),
                 'btn-inspire-learning': () => this.world.inspireLearning(),
@@ -725,6 +729,16 @@
                 return;
             }
 
+            if (selected.entityType === 'colony') {
+                setText('selection-title', selected.name);
+                setSelectionStat('stat-label-a', 'stat-energy', 'Population', `${Math.round(selected.population || 0)}`);
+                setSelectionStat('stat-label-b', 'stat-hunger', 'Stores', `F${Math.round(selected.food || 0)} W${Math.round(selected.water || 0)}`);
+                setSelectionStat('stat-label-c', 'stat-fun', 'Diplomacy', selected.diplomacyState || 'unknown');
+                setSelectionStat('stat-label-d', 'stat-age', 'Action', selected.recentAction || 'settled');
+                setSelectionStat('stat-label-e', 'stat-trait', 'Path', `${selected.type} / ${selected.culturalPath || 'frontier kin'}`);
+                return;
+            }
+
             if (selected.type === 'wildAnimal') {
                 setText('selection-title', 'Wild Animal');
                 setSelectionStat('stat-label-a', 'stat-energy', 'Type', 'Food source');
@@ -793,6 +807,13 @@
                 selectionLines.push(`Age: ${selected.ageYears.toFixed(1)} (${selected.lifeStage})`);
                 selectionLines.push(`Health: ${selected.stats.health.toFixed(0)}  Morale: ${selected.stats.morale.toFixed(0)}`);
                 selectionLines.push(`Family: ${selected.familyId ?? '-'}`);
+            } else if (selected.entityType === 'colony') {
+                selectionLines.push(`${selected.name}`);
+                selectionLines.push(`Type: ${selected.type}`);
+                selectionLines.push(`Population: ${Math.round(selected.population || 0)}`);
+                selectionLines.push(`Food ${Number(selected.food || 0).toFixed(1)} / Water ${Number(selected.water || 0).toFixed(1)} / Wood ${Number(selected.wood || 0).toFixed(1)}`);
+                selectionLines.push(`Diplomacy: ${selected.diplomacyState || 'unknown'}  Border: ${Number(selected.borderFriction || 0).toFixed(2)}`);
+                selectionLines.push(`Recent action: ${selected.recentAction || 'settled'}`);
             } else if (selected.type) {
                 selectionLines.push(`${selected.type}`);
                 if (typeof selected.amount === 'number') {
