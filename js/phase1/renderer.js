@@ -1,6 +1,6 @@
 (function () {
     const PhaseOneSim = window.PhaseOneSim || (window.PhaseOneSim = {});
-    const { WORLD_WIDTH, WORLD_HEIGHT, CELL_WIDTH, CELL_HEIGHT, BIOME_COLORS } = PhaseOneSim.constants;
+    const { WORLD_WIDTH, WORLD_HEIGHT, GRID_COLS, GRID_ROWS, CELL_WIDTH, CELL_HEIGHT, BIOME_COLORS } = PhaseOneSim.constants;
     const { clamp, distance } = PhaseOneSim;
     const STRUCTURE_SPRITE_CONFIG = {
         src: 'crop_hut.png',
@@ -105,10 +105,31 @@
             this.colonistSpriteReady = false;
             this.colonistSpriteState = new Map();
             this.weatherPatternCache = new Map();
+            this.performanceProfile = this.detectPerformanceProfile();
+            this.layerCadenceCache = new Map();
             this.loadStructureSprite();
             this.loadFoodStorageSprite();
             this.loadColonistSprite();
             this.resize();
+        }
+
+        detectPerformanceProfile() {
+            const coarsePointer = typeof window.matchMedia === 'function'
+                ? window.matchMedia('(pointer: coarse)').matches
+                : false;
+            const narrowViewport = Math.min(window.innerWidth || 1280, window.innerHeight || 720) <= 820;
+            const mobile = coarsePointer || narrowViewport;
+            return {
+                mobile,
+                lowPower: mobile,
+                maxPixelRatio: mobile ? 1.25 : 1.75,
+                weatherDensity: mobile ? 0.62 : 1,
+                nearGroundDensity: mobile ? 0.58 : 1,
+                fogLayers: mobile ? 1 : 2,
+                nearGroundInterval: mobile ? 0.12 : 0,
+                battleOverlayInterval: mobile ? 0.1 : 0,
+                factionEffectInterval: mobile ? 0.14 : 0
+            };
         }
 
         loadStructureSprite() {
@@ -154,7 +175,8 @@
         }
 
         resize() {
-            const ratio = window.devicePixelRatio || 1;
+            this.performanceProfile = this.detectPerformanceProfile();
+            const ratio = Math.min(window.devicePixelRatio || 1, this.performanceProfile.maxPixelRatio);
             const width = this.canvas.clientWidth;
             const height = this.canvas.clientHeight;
             this.canvas.width = Math.max(1, Math.floor(width * ratio));
@@ -198,6 +220,60 @@
                 width: halfWidth * 2,
                 height: halfHeight * 2
             };
+        }
+
+        forEachVisibleCell(bounds, callback, margin = 1) {
+            const left = clamp(Math.floor(bounds.left / CELL_WIDTH) - margin, 0, GRID_COLS - 1);
+            const right = clamp(Math.ceil(bounds.right / CELL_WIDTH) + margin, 0, GRID_COLS - 1);
+            const top = clamp(Math.floor(bounds.top / CELL_HEIGHT) - margin, 0, GRID_ROWS - 1);
+            const bottom = clamp(Math.ceil(bounds.bottom / CELL_HEIGHT) + margin, 0, GRID_ROWS - 1);
+            for (let row = top; row <= bottom; row += 1) {
+                const rowIndex = row * GRID_COLS;
+                for (let col = left; col <= right; col += 1) {
+                    const cell = this.world.cells[rowIndex + col];
+                    if (cell) {
+                        callback(cell);
+                    }
+                }
+            }
+        }
+
+        isPointVisible(bounds, x, y, margin = 24) {
+            return x >= bounds.left - margin &&
+                x <= bounds.right + margin &&
+                y >= bounds.top - margin &&
+                y <= bounds.bottom + margin;
+        }
+
+        isCircleVisible(bounds, x, y, radius = 0, margin = 12) {
+            return x + radius >= bounds.left - margin &&
+                x - radius <= bounds.right + margin &&
+                y + radius >= bounds.top - margin &&
+                y - radius <= bounds.bottom + margin;
+        }
+
+        isSegmentVisible(bounds, x1, y1, x2, y2, margin = 28) {
+            const minX = Math.min(x1, x2);
+            const maxX = Math.max(x1, x2);
+            const minY = Math.min(y1, y2);
+            const maxY = Math.max(y1, y2);
+            return maxX >= bounds.left - margin &&
+                minX <= bounds.right + margin &&
+                maxY >= bounds.top - margin &&
+                minY <= bounds.bottom + margin;
+        }
+
+        shouldRefreshLayer(key, interval) {
+            if (!interval || interval <= 0) {
+                return true;
+            }
+            const now = this.world?.elapsed || 0;
+            const last = this.layerCadenceCache.get(key) ?? -Infinity;
+            if (now - last >= interval) {
+                this.layerCadenceCache.set(key, now);
+                return true;
+            }
+            return false;
         }
 
         snapPixel(value, size = 1) {
@@ -525,8 +601,10 @@
         }
 
         drawLandUse(ctx) {
+            const bounds = this.getViewBounds();
+            this.drawBuildRingDebug(ctx);
             const occupation = this.world.warAftermath?.occupation || null;
-            if (occupation) {
+            if (occupation && this.isCircleVisible(bounds, this.world.camp.x, this.world.camp.y, 150 + occupation.severity * 70, 32)) {
                 ctx.fillStyle = 'rgba(171, 67, 57, 0.08)';
                 ctx.beginPath();
                 ctx.arc(this.world.camp.x, this.world.camp.y, 150 + occupation.severity * 70, 0, Math.PI * 2);
@@ -538,6 +616,9 @@
                 ctx.stroke();
             }
             for (const road of this.world.landUse.roads || []) {
+                if (!this.isSegmentVisible(bounds, road.fromX, road.fromY, road.toX, road.toY, 36)) {
+                    continue;
+                }
                 const surface = road.surface || 'road';
                 ctx.strokeStyle = surface === 'stone'
                     ? 'rgba(168, 172, 176, 0.34)'
@@ -561,6 +642,9 @@
                 ctx.stroke();
             }
             for (const path of this.world.landUse.trafficPaths || []) {
+                if (!this.isSegmentVisible(bounds, path.fromX, path.fromY, path.toX, path.toY, 36)) {
+                    continue;
+                }
                 ctx.strokeStyle = path.surface === 'dirt'
                     ? `rgba(126, 90, 54, ${(0.12 + (path.quality || 0) * 0.18).toFixed(3)})`
                     : `rgba(148, 126, 88, ${(0.08 + (path.quality || 0) * 0.12).toFixed(3)})`;
@@ -573,6 +657,9 @@
                 ctx.setLineDash([]);
             }
             for (const route of this.world.landUse.tradeRoutes || []) {
+                if (!this.isSegmentVisible(bounds, route.fromX, route.fromY, route.toX, route.toY, 42)) {
+                    continue;
+                }
                 ctx.strokeStyle = route.surface === 'caravan-road'
                     ? `rgba(223, 203, 126, ${(0.18 + route.throughput * 0.18).toFixed(3)})`
                     : `rgba(208, 178, 112, ${(0.12 + route.throughput * 0.14).toFixed(3)})`;
@@ -589,7 +676,7 @@
                 ctx.beginPath();
                 ctx.arc(midpointX, midpointY, 3 + route.throughput * 2, 0, Math.PI * 2);
                 ctx.fill();
-                if (this.zoom >= 1.35) {
+                if (!this.performanceProfile.mobile && this.zoom >= 1.35) {
                     ctx.fillStyle = 'rgba(245, 235, 208, 0.7)';
                     ctx.font = 'bold 10px Georgia';
                     ctx.textAlign = 'center';
@@ -600,6 +687,9 @@
                 }
             }
             for (const route of this.world.landUse.patrolRoutes || []) {
+                if (!this.isSegmentVisible(bounds, route.fromX, route.fromY, route.toX, route.toY, 36)) {
+                    continue;
+                }
                 ctx.strokeStyle = route.diplomacyState === 'rival'
                     ? 'rgba(209, 102, 84, 0.34)'
                     : route.diplomacyState === 'allied'
@@ -614,6 +704,9 @@
                 ctx.setLineDash([]);
             }
             for (const zone of this.world.landUse.contestedZones || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 24)) {
+                    continue;
+                }
                 const alpha = 0.06 + zone.severity * 0.08;
                 ctx.fillStyle = zone.diplomacyState === 'rival'
                     ? `rgba(187, 76, 60, ${alpha.toFixed(3)})`
@@ -630,6 +723,9 @@
                 ctx.stroke();
             }
             for (const outpost of this.world.landUse.outposts || []) {
+                if (!this.isPointVisible(bounds, outpost.x, outpost.y, 20)) {
+                    continue;
+                }
                 const color = outpost.side === 'rival'
                     ? 'rgba(214, 110, 92, 0.82)'
                     : outpost.side === 'allied'
@@ -649,6 +745,9 @@
                 ctx.stroke();
             }
             for (const point of this.world.landUse.ambushPoints || []) {
+                if (!this.isCircleVisible(bounds, point.x, point.y, point.radius, 20)) {
+                    continue;
+                }
                 ctx.strokeStyle = point.kind === 'choke'
                     ? `rgba(227, 190, 116, ${(0.2 + point.severity * 0.24).toFixed(3)})`
                     : `rgba(221, 124, 92, ${(0.2 + point.severity * 0.24).toFixed(3)})`;
@@ -664,6 +763,9 @@
                 ctx.stroke();
             }
             for (const district of this.world.landUse.districts || []) {
+                if (!this.isCircleVisible(bounds, district.x, district.y, district.radius, 20)) {
+                    continue;
+                }
                 const fills = {
                     housing: 'rgba(222, 201, 155, 0.08)',
                     farming: 'rgba(146, 197, 88, 0.08)',
@@ -689,7 +791,7 @@
                 ctx.beginPath();
                 ctx.arc(district.x, district.y, district.radius, 0, Math.PI * 2);
                 ctx.stroke();
-                if (this.zoom >= 1.45) {
+                if (!this.performanceProfile.mobile && this.zoom >= 1.45) {
                     const labels = {
                         housing: 'Homes',
                         farming: 'Fields',
@@ -708,6 +810,9 @@
                 }
             }
             for (const site of this.world.landUse.institutionSites || []) {
+                if (!this.isCircleVisible(bounds, site.x, site.y, 13 + site.influence * 5, 16)) {
+                    continue;
+                }
                 const palette = site.type === 'council hall'
                     ? { fill: 'rgba(210, 188, 124, 0.85)', stroke: 'rgba(96, 72, 36, 0.8)' }
                     : site.type === 'learning hall' || site.type === 'craft lodge'
@@ -724,7 +829,7 @@
                 ctx.beginPath();
                 ctx.arc(site.x, site.y, 8 + site.influence * 5, 0, Math.PI * 2);
                 ctx.stroke();
-                if (this.zoom >= 1.55) {
+                if (!this.performanceProfile.mobile && this.zoom >= 1.55) {
                     ctx.fillStyle = 'rgba(244, 235, 210, 0.74)';
                     ctx.font = 'bold 10px Georgia';
                     ctx.textAlign = 'center';
@@ -735,12 +840,18 @@
                 }
             }
             for (const zone of this.world.landUse.farmingZones || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 16)) {
+                    continue;
+                }
                 ctx.fillStyle = 'rgba(146, 197, 88, 0.12)';
                 ctx.beginPath();
                 ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
                 ctx.fill();
             }
             for (const zone of this.world.landUse.branchTerritories || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 24)) {
+                    continue;
+                }
                 const occupied = zone.occupationState === 'occupying' || zone.occupationState === 'occupiedByMain';
                 ctx.strokeStyle = occupied
                     ? 'rgba(218, 102, 86, 0.34)'
@@ -761,6 +872,9 @@
                 }
             }
             for (const zone of this.world.landUse.gatheringZones || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 16)) {
+                    continue;
+                }
                 ctx.strokeStyle = 'rgba(236, 222, 145, 0.22)';
                 ctx.lineWidth = 1.2;
                 ctx.beginPath();
@@ -768,6 +882,9 @@
                 ctx.stroke();
             }
             for (const zone of this.world.landUse.huntingZones || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 16)) {
+                    continue;
+                }
                 ctx.strokeStyle = 'rgba(169, 130, 92, 0.2)';
                 ctx.lineWidth = 1.2;
                 ctx.beginPath();
@@ -775,6 +892,9 @@
                 ctx.stroke();
             }
             for (const zone of this.world.landUse.dangerZones || []) {
+                if (!this.isCircleVisible(bounds, zone.x, zone.y, zone.radius, 16)) {
+                    continue;
+                }
                 ctx.strokeStyle = 'rgba(208, 83, 72, 0.22)';
                 ctx.lineWidth = 1.4;
                 ctx.beginPath();
@@ -783,9 +903,34 @@
             }
         }
 
+        drawBuildRingDebug(ctx) {
+            if (!this.world.debugFlags?.showBuildRing) {
+                return;
+            }
+            const inner = this.world.getBuildRingMinDistance ? this.world.getBuildRingMinDistance() : 180;
+            const outer = this.world.getBuildRingMaxDistance ? this.world.getBuildRingMaxDistance() : 560;
+            ctx.save();
+            ctx.fillStyle = 'rgba(92, 174, 255, 0.05)';
+            ctx.beginPath();
+            ctx.arc(this.world.camp.x, this.world.camp.y, outer, 0, Math.PI * 2);
+            ctx.arc(this.world.camp.x, this.world.camp.y, inner, 0, Math.PI * 2, true);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(245, 234, 85, 0.9)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(this.world.camp.x, this.world.camp.y, inner, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(52, 129, 255, 0.85)';
+            ctx.beginPath();
+            ctx.arc(this.world.camp.x, this.world.camp.y, outer, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
         drawTerrain(ctx) {
             const season = this.world.getSeason().name;
-            for (const cell of this.world.cells) {
+            const bounds = this.getViewBounds();
+            this.forEachVisibleCell(bounds, (cell) => {
                 let fill = BIOME_COLORS[cell.biome];
                 const terrain = cell.terrain || {};
                 if (season === 'Winter' && cell.biome !== 'water') {
@@ -896,7 +1041,7 @@
                     ctx.lineTo(cell.x + 40, cell.y + 26);
                     ctx.stroke();
                 }
-            }
+            });
 
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
             ctx.lineWidth = 1;
@@ -1212,7 +1357,12 @@
         }
 
         drawBattlefronts(ctx) {
+            const bounds = this.getViewBounds();
+            const detailedOverlay = this.shouldRefreshLayer('battle-overlay', this.performanceProfile.battleOverlayInterval);
             for (const scar of this.world.battleScars || []) {
+                if (!this.isCircleVisible(bounds, scar.x, scar.y, scar.radius, 20)) {
+                    continue;
+                }
                 const alpha = Math.max(0.12, Math.min(0.42, (scar.ttl / Math.max(1, scar.maxTtl || scar.ttl || 1)) * 0.42));
                 ctx.fillStyle = `rgba(43, 31, 24, ${alpha})`;
                 ctx.beginPath();
@@ -1222,6 +1372,9 @@
             for (const front of this.world.battlefronts || []) {
                 const alpha = Math.max(0.2, Math.min(1, front.ttl / Math.max(1, front.maxTtl || front.ttl || 1)));
                 const radius = 16 + front.scale * 16;
+                if (!this.isCircleVisible(bounds, front.x, front.y, radius + 28, 28)) {
+                    continue;
+                }
                 if (front.formation?.attackerOrigin) {
                     ctx.strokeStyle = `rgba(218, 141, 115, ${0.28 * alpha})`;
                     ctx.lineWidth = 2;
@@ -1229,17 +1382,19 @@
                     ctx.moveTo(front.formation.attackerOrigin.x, front.formation.attackerOrigin.y);
                     ctx.lineTo(front.formation.defenderAnchor.x, front.formation.defenderAnchor.y);
                     ctx.stroke();
-                    ctx.fillStyle = `rgba(238, 214, 178, ${0.9 * alpha})`;
-                    ctx.font = 'bold 8px Georgia';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillText(
-                        `${front.tactics?.attacker || 'attack'} / ${front.reportType || 'battle'}`,
-                        front.formation.attackerOrigin.x,
-                        front.formation.attackerOrigin.y - 8
-                    );
-                    ctx.textAlign = 'start';
-                    ctx.textBaseline = 'alphabetic';
+                    if (detailedOverlay) {
+                        ctx.fillStyle = `rgba(238, 214, 178, ${0.9 * alpha})`;
+                        ctx.font = 'bold 8px Georgia';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'bottom';
+                        ctx.fillText(
+                            `${front.tactics?.attacker || 'attack'} / ${front.reportType || 'battle'}`,
+                            front.formation.attackerOrigin.x,
+                            front.formation.attackerOrigin.y - 8
+                        );
+                        ctx.textAlign = 'start';
+                        ctx.textBaseline = 'alphabetic';
+                    }
                 }
                 ctx.strokeStyle = `rgba(228, 113, 92, ${0.7 * alpha})`;
                 ctx.lineWidth = 2.2;
@@ -1258,15 +1413,17 @@
                     ctx.fill();
                 }
 
-                ctx.fillStyle = `rgba(70, 24, 19, ${0.8 * alpha})`;
-                ctx.fillRect(front.x - 16, front.y - radius - 12, 32, 4);
-                ctx.fillStyle = `rgba(218, 97, 82, ${0.95 * alpha})`;
-                ctx.fillRect(front.x - 16, front.y - radius - 12, 32 * Math.max(0, front.attackerHealth / Math.max(1, front.attackerMaxHealth)), 4);
+                if (detailedOverlay) {
+                    ctx.fillStyle = `rgba(70, 24, 19, ${0.8 * alpha})`;
+                    ctx.fillRect(front.x - 16, front.y - radius - 12, 32, 4);
+                    ctx.fillStyle = `rgba(218, 97, 82, ${0.95 * alpha})`;
+                    ctx.fillRect(front.x - 16, front.y - radius - 12, 32 * Math.max(0, front.attackerHealth / Math.max(1, front.attackerMaxHealth)), 4);
 
-                ctx.fillStyle = `rgba(30, 45, 26, ${0.8 * alpha})`;
-                ctx.fillRect(front.x - 16, front.y - radius - 6, 32, 4);
-                ctx.fillStyle = `rgba(123, 196, 111, ${0.95 * alpha})`;
-                ctx.fillRect(front.x - 16, front.y - radius - 6, 32 * Math.max(0, front.defenderHealth / Math.max(1, front.defenderMaxHealth)), 4);
+                    ctx.fillStyle = `rgba(30, 45, 26, ${0.8 * alpha})`;
+                    ctx.fillRect(front.x - 16, front.y - radius - 6, 32, 4);
+                    ctx.fillStyle = `rgba(123, 196, 111, ${0.95 * alpha})`;
+                    ctx.fillRect(front.x - 16, front.y - radius - 6, 32 * Math.max(0, front.defenderHealth / Math.max(1, front.defenderMaxHealth)), 4);
+                }
 
                 ctx.strokeStyle = `rgba(255, 233, 190, ${0.75 * alpha})`;
                 ctx.lineWidth = 1.8;
@@ -1316,13 +1473,15 @@
                 ctx.beginPath();
                 ctx.arc(burst.x, burst.y, 4 + (1 - alpha) * 12, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.strokeStyle = burst.type === 'building'
-                    ? `rgba(97, 54, 35, ${(0.7 * alpha).toFixed(3)})`
-                    : `rgba(140, 56, 46, ${(0.68 * alpha).toFixed(3)})`;
-                ctx.lineWidth = 1.4;
-                ctx.beginPath();
-                ctx.arc(burst.x, burst.y, 2 + (1 - alpha) * 8, 0, Math.PI * 2);
-                ctx.stroke();
+                if (detailedOverlay) {
+                    ctx.strokeStyle = burst.type === 'building'
+                        ? `rgba(97, 54, 35, ${(0.7 * alpha).toFixed(3)})`
+                        : `rgba(140, 56, 46, ${(0.68 * alpha).toFixed(3)})`;
+                    ctx.lineWidth = 1.4;
+                    ctx.beginPath();
+                    ctx.arc(burst.x, burst.y, 2 + (1 - alpha) * 8, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
             }
         }
 
@@ -1440,8 +1599,13 @@
         }
 
         drawFactionEffects(ctx) {
+            const bounds = this.getViewBounds();
+            const showLabels = this.shouldRefreshLayer('faction-effects', this.performanceProfile.factionEffectInterval);
             for (const effect of this.world.factionEffects || []) {
                 if (!Number.isFinite(effect.x) || !Number.isFinite(effect.y)) {
+                    continue;
+                }
+                if (!this.isCircleVisible(bounds, effect.x, effect.y, 24, 18)) {
                     continue;
                 }
                 const alpha = Math.max(0, Math.min(1, effect.ttl / Math.max(0.1, effect.maxTtl || effect.ttl || 1)));
@@ -1464,13 +1628,15 @@
                 ctx.arc(effect.x, effect.y, 6 + (1 - alpha) * 8, 0, Math.PI * 2);
                 ctx.fill();
 
-                ctx.fillStyle = `rgba(61, 47, 31, ${(0.95 * alpha).toFixed(3)})`;
-                ctx.font = 'bold 8px Georgia';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'bottom';
-                ctx.fillText(effect.label || effect.type, effect.x, effect.y - 12);
-                ctx.textAlign = 'start';
-                ctx.textBaseline = 'alphabetic';
+                if (showLabels) {
+                    ctx.fillStyle = `rgba(61, 47, 31, ${(0.95 * alpha).toFixed(3)})`;
+                    ctx.font = 'bold 8px Georgia';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(effect.label || effect.type, effect.x, effect.y - 12);
+                    ctx.textAlign = 'start';
+                    ctx.textBaseline = 'alphabetic';
+                }
             }
         }
 
@@ -2689,9 +2855,10 @@
             if (weatherState.surfaceWetness <= 0.03 && weatherState.snowCover <= 0.03 && weatherState.puddleLevel <= 0.08) {
                 return;
             }
-            for (const cell of this.world.cells) {
+            const bounds = this.getViewBounds();
+            this.forEachVisibleCell(bounds, (cell) => {
                 if (cell.biome === 'valley' || cell.biome === 'water') {
-                    continue;
+                    return;
                 }
                 const x = cell.x;
                 const y = cell.y;
@@ -2715,15 +2882,19 @@
                     ctx.fillStyle = `rgba(198, 224, 239, ${stateAtCell.puddleLevel * 0.12})`;
                     ctx.fillRect(puddleX + 2, puddleY + 2, Math.max(2, puddleW - 6), 2);
                 }
-            }
+            });
         }
 
         drawWeatherNearGround(ctx) {
+            if (!this.shouldRefreshLayer('weather-near-ground', this.performanceProfile.nearGroundInterval)) {
+                return;
+            }
             const weatherState = this.world.getWeatherState();
+            const density = this.performanceProfile.nearGroundDensity;
             if (weatherState.splashRate > 0.04) {
                 const transitionFade = 0.4 + weatherState.transition * 0.6;
                 ctx.fillStyle = `rgba(202, 231, 255, ${(0.08 + weatherState.splashRate * 0.14) * transitionFade})`;
-                const splashCount = Math.round((8 + weatherState.splashRate * 20) * transitionFade);
+                const splashCount = Math.max(4, Math.round((8 + weatherState.splashRate * 20) * transitionFade * density));
                 for (let i = 0; i < splashCount; i++) {
                     const x = this.snapPixel((i * 151 + this.world.elapsed * (70 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
                     const y = this.snapPixel((i * 89 + this.world.elapsed * (90 + weatherState.intensity * 70)) % WORLD_HEIGHT, 2);
@@ -2732,7 +2903,7 @@
                 }
             }
             if (weatherState.leafDrift > 0.08) {
-                const driftCount = Math.round(10 + weatherState.leafDrift * 18);
+                const driftCount = Math.max(5, Math.round((10 + weatherState.leafDrift * 18) * density));
                 ctx.fillStyle = weatherState.type === 'Cold Snap'
                     ? 'rgba(239, 245, 251, 0.52)'
                     : 'rgba(173, 145, 92, 0.3)';
@@ -2749,7 +2920,7 @@
         drawWeather(ctx) {
             const weatherState = this.world.getWeatherState();
             const zoomOut = this.getZoomOutFactor();
-            const densityScale = 1 - zoomOut * 0.22;
+            const densityScale = (1 - zoomOut * 0.22) * this.performanceProfile.weatherDensity;
             const gustStrength = weatherState.gustStrength || 0;
             const transitionFade = 0.35 + weatherState.transition * 0.65;
             if (weatherState.fogDensity > 0.04 || weatherState.type === 'Cloudy' || weatherState.type === 'Rain' || weatherState.type === 'Storm') {
@@ -2762,14 +2933,16 @@
                     alpha: cloudAlpha,
                     variant: weatherState.type === 'Storm' ? 1 : 0
                 });
-                this.drawPixelWeatherSheet(ctx, 'fog', {
-                    x: ((this.world.elapsed * (3 + weatherState.windX * (3 + gustStrength * 3))) + 210) % (WORLD_WIDTH + 220) - 180,
-                    y: 150 + Math.sin(this.world.elapsed * (0.05 + gustStrength * 0.02)) * (10 + gustStrength * 6),
-                    width: WORLD_WIDTH * 0.68,
-                    height: 150 + weatherState.fogDensity * 90,
-                    alpha: cloudAlpha * 0.8,
-                    variant: 2
-                });
+                if (this.performanceProfile.fogLayers > 1) {
+                    this.drawPixelWeatherSheet(ctx, 'fog', {
+                        x: ((this.world.elapsed * (3 + weatherState.windX * (3 + gustStrength * 3))) + 210) % (WORLD_WIDTH + 220) - 180,
+                        y: 150 + Math.sin(this.world.elapsed * (0.05 + gustStrength * 0.02)) * (10 + gustStrength * 6),
+                        width: WORLD_WIDTH * 0.68,
+                        height: 150 + weatherState.fogDensity * 90,
+                        alpha: cloudAlpha * 0.8,
+                        variant: 2
+                    });
+                }
             }
 
             if (weatherState.precipitationType === 'rain') {
@@ -2777,7 +2950,7 @@
                     ? `rgba(170, 205, 255, ${(0.2 + weatherState.intensity * 0.28) * transitionFade})`
                     : `rgba(190, 226, 255, ${(0.16 + weatherState.intensity * 0.22) * transitionFade})`;
                 ctx.lineWidth = weatherState.type === 'Storm' ? 2 : 1;
-                const dropCount = Math.round((56 + weatherState.intensity * 132) * densityScale * transitionFade);
+                const dropCount = Math.max(20, Math.round((56 + weatherState.intensity * 132) * densityScale * transitionFade));
                 const dx = this.snapPixel(weatherState.windX * (12 + gustStrength * 8), 1);
                 const dy = this.snapPixel(10 + weatherState.intensity * 8 + Math.abs(weatherState.windY) * 3 + gustStrength * 2, 1);
                 for (let i = 0; i < dropCount; i++) {
@@ -2792,7 +2965,7 @@
                     ctx.fillStyle = weatherState.type === 'Storm'
                         ? `rgba(212, 234, 255, ${(0.16 + weatherState.intensity * 0.14) * transitionFade})`
                         : `rgba(206, 231, 248, ${(0.12 + weatherState.intensity * 0.12) * transitionFade})`;
-                    const clusterCount = Math.round((10 + weatherState.intensity * 20) * densityScale * transitionFade);
+                    const clusterCount = Math.max(4, Math.round((10 + weatherState.intensity * 20) * densityScale * transitionFade));
                     for (let i = 0; i < clusterCount; i++) {
                         const x = this.snapPixel((i * 73 + this.world.elapsed * (132 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
                         const y = this.snapPixel((i * 49 + this.world.elapsed * (180 + weatherState.intensity * 120)) % WORLD_HEIGHT, 2);
@@ -2804,7 +2977,7 @@
                 }
             } else if (weatherState.precipitationType === 'snow') {
                 ctx.fillStyle = `rgba(240, 247, 255, ${(0.22 + weatherState.intensity * 0.22) * transitionFade})`;
-                const flakeCount = Math.round((32 + weatherState.intensity * 64) * densityScale * transitionFade);
+                const flakeCount = Math.max(14, Math.round((32 + weatherState.intensity * 64) * densityScale * transitionFade));
                 for (let i = 0; i < flakeCount; i++) {
                     const drift = Math.sin(this.world.elapsed * (0.7 + gustStrength * 0.08) + i * 0.3) * (8 + gustStrength * 5) + weatherState.windX * (12 + gustStrength * 8);
                     const x = this.snapPixel((i * 71 + this.world.elapsed * 28 + drift) % WORLD_WIDTH, 2);
@@ -2825,14 +2998,15 @@
                     variant: 1
                 });
                 ctx.fillStyle = `rgba(224, 181, 104, ${0.04 + weatherState.dustDensity * 0.1})`;
-                for (let i = 0; i < 12; i++) {
+                const dustCount = Math.max(6, Math.round(12 * densityScale));
+                for (let i = 0; i < dustCount; i++) {
                     const x = this.snapPixel((i * 143 + this.world.elapsed * 24) % WORLD_WIDTH, 4);
                     const y = this.snapPixel((i * 81 + this.world.elapsed * 18) % WORLD_HEIGHT, 4);
                     ctx.fillRect(x, y, 12 + (i % 3) * 4, 2);
                 }
             }
 
-            if (weatherState.fogDensity > 0.06) {
+            if (weatherState.fogDensity > 0.06 && this.performanceProfile.fogLayers > 1) {
                 this.drawPixelWeatherSheet(ctx, 'fog', {
                     x: ((this.world.elapsed * (2 + weatherState.windX * (2 + gustStrength * 2))) % (WORLD_WIDTH + 260)) - 180,
                     y: WORLD_HEIGHT * 0.18,

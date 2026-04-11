@@ -457,10 +457,14 @@
         update(dt) {
             const completed = [];
 
-            for (const burst of this.world.battleBursts) {
+            for (let index = this.world.battleBursts.length - 1; index >= 0; index -= 1) {
+                const burst = this.world.battleBursts[index];
                 burst.ttl = Math.max(0, burst.ttl - dt);
+                if (burst.ttl <= 0) {
+                    this.world.battleBursts.splice(index, 1);
+                    this.world.battleBurstPool?.release(burst);
+                }
             }
-            this.world.battleBursts = this.world.battleBursts.filter((burst) => burst.ttl > 0);
 
             for (const front of this.world.battlefronts) {
                 if (front.resolved) {
@@ -685,13 +689,12 @@
                 const building = this.world.buildings.find((entry) => entry.id === front.targetBuildingId) || null;
                 if (building && distance(attacker, building) < 18) {
                     building.integrity = clamp(building.integrity - (0.1 + front.scale * 0.14), 0, building.maxIntegrity);
-                    this.world.battleBursts.push({
-                        x: building.x + (this.world.rng() - 0.5) * 12,
-                        y: building.y + (this.world.rng() - 0.5) * 12,
-                        ttl: 1.05,
-                        maxTtl: 1.05,
-                        type: 'building'
-                    });
+                    this.world.spawnBattleBurst(
+                        building.x + (this.world.rng() - 0.5) * 12,
+                        building.y + (this.world.rng() - 0.5) * 12,
+                        1.05,
+                        'building'
+                    );
                 }
             }
         }
@@ -826,13 +829,12 @@
             const orderBonus = this.getColonistEngageModifier(front, colonist);
             target.hp = Math.max(0, target.hp - dealt * tacticBonus * orderBonus);
             front.damageFlash = 0.95;
-            this.world.battleBursts.push({
-                x: target.x + (this.world.rng() - 0.5) * 8,
-                y: target.y + (this.world.rng() - 0.5) * 8,
-                ttl: 0.9,
-                maxTtl: 0.9,
-                type: 'hit'
-            });
+            this.world.spawnBattleBurst(
+                target.x + (this.world.rng() - 0.5) * 8,
+                target.y + (this.world.rng() - 0.5) * 8,
+                0.9,
+                'hit'
+            );
             if (target.hp <= 0 && target.alive) {
                 target.alive = false;
                 if (front.mode === 'outbound') {
@@ -1129,13 +1131,12 @@
                     building.integrity = clamp(building.integrity - damage, 0, building.maxIntegrity);
                     this.world.startRepairProject(building);
                     damaged.push(building.type);
-                    this.world.battleBursts.push({
-                        x: building.x + (this.world.rng() - 0.5) * 12,
-                        y: building.y + (this.world.rng() - 0.5) * 12,
-                        ttl: 1.2,
-                        maxTtl: 1.2,
-                        type: 'building'
-                    });
+                    this.world.spawnBattleBurst(
+                        building.x + (this.world.rng() - 0.5) * 12,
+                        building.y + (this.world.rng() - 0.5) * 12,
+                        1.2,
+                        'building'
+                    );
                 }
             }
             front.breakthroughDamage = damaged;

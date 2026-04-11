@@ -50,7 +50,7 @@
             audio.loop = true;
             audio.preload = 'auto';
             audio.volume = 0;
-            return { audio, volume: 0, target: 0 };
+            return { audio, volume: 0, target: 0, active: false };
         }
 
         createThunderPlayer(src) {
@@ -87,10 +87,31 @@
             if (!this.players) {
                 return;
             }
-            Object.values(this.players).forEach(({ audio }) => {
-                audio.play().catch(() => {});
-            });
+            this.setLoopPlayback('background', true);
             this.debugState.contextState = 'html-audio-running';
+        }
+
+        setLoopPlayback(name, shouldPlay) {
+            const player = this.players?.[name];
+            if (!player) {
+                return;
+            }
+            if (shouldPlay) {
+                if (!player.active) {
+                    player.active = true;
+                    player.audio.play().catch(() => {
+                        player.active = false;
+                    });
+                }
+                return;
+            }
+            if (player.active) {
+                player.audio.pause();
+                player.active = false;
+            }
+            if (player.audio.currentTime > 0.05) {
+                player.audio.currentTime = 0;
+            }
         }
 
         setPlayerTarget(name, value) {
@@ -108,6 +129,7 @@
             }
             player.volume += (player.target - player.volume) * factor;
             player.audio.volume = Math.max(0, Math.min(1, player.volume));
+            this.setLoopPlayback(name, player.target > 0.012 || player.volume > 0.018);
             return player.volume;
         }
 
@@ -153,7 +175,7 @@
                 return;
             }
             const weather = this.world.getWeatherState();
-            const weatherType = weather.targetType || this.world.getWeather().name || weather.type || 'Clear';
+            const weatherType = weather.type || this.world.getWeather().name || 'Clear';
             const shelterMix = this.computeShelterMix();
             const rainAmount = weatherType === 'Rain' ? (weather.precipitationIntensity || weather.intensity || 0) : 0;
             const windAmount = Math.min(1, Math.hypot(weather.windX, weather.windY) * 1.12 + weather.darkness * 0.36 + (weather.gustStrength || 0) * 0.22);
@@ -162,14 +184,17 @@
                 : 0;
 
             const backgroundTarget = 0.07;
-            const windTarget = weatherType === 'Cloudy' || weatherType === 'Storm'
-                ? (weatherType === 'Storm' ? 0.1 : 0.05) + windAmount * (weatherType === 'Storm' ? 0.14 : 0.08) * (1 - shelterMix * 0.28)
-                : 0;
-            const rainTarget = weatherType === 'Rain'
-                ? rainAmount * (0.08 + (1 - shelterMix) * 0.18)
-                : 0;
+            let windTarget = 0;
+            let rainTarget = 0;
+            let stormTarget = 0;
+            if (weatherType === 'Cloudy' || weatherType === 'Cold Snap') {
+                windTarget = 0.05 + windAmount * 0.1 * (1 - shelterMix * 0.28);
+            } else if (weatherType === 'Rain') {
+                rainTarget = rainAmount * (0.08 + (1 - shelterMix) * 0.18);
+            } else if (weatherType === 'Storm') {
+                stormTarget = 0.1 + stormAmount * 0.2 * (1 - shelterMix * 0.22);
+            }
             const roofRainTarget = weatherType === 'Rain' ? rainAmount * shelterMix * 0.04 : 0;
-            const stormTarget = 0;
 
             this.setPlayerTarget('background', backgroundTarget);
             this.setPlayerTarget('wind', windTarget);
@@ -202,7 +227,7 @@
 
             this.debugState.contextState = 'html-audio-running';
             this.debugState.shelterMix = Number(shelterMix.toFixed(2));
-            this.debugState.wind = Number(wind.toFixed(3));
+            this.debugState.wind = Number((wind + storm).toFixed(3));
             this.debugState.rain = Number(rain.toFixed(3));
             this.debugState.roofRain = Number(roofRainTarget.toFixed(3));
             this.debugState.snow = 0;
@@ -232,6 +257,8 @@
         let resizeTick = null;
         let resizeObserver = null;
         let lastAutosaveElapsed = world.elapsed || 0;
+        let audioUpdateAccumulator = 0;
+        const audioUpdateInterval = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches ? 0.12 : 0.05;
         let savePersistenceSuppressed = false;
         const gestureBlocker = (event) => {
             event.preventDefault();
@@ -446,7 +473,11 @@
                 renderer.render();
                 ui.refresh();
             }
-            ambientAudio.update();
+            audioUpdateAccumulator += dt;
+            if (audioUpdateAccumulator >= audioUpdateInterval) {
+                ambientAudio.update();
+                audioUpdateAccumulator = 0;
+            }
             requestAnimationFrame(frame);
         }
 
@@ -484,6 +515,7 @@
             manualStepping = true;
             step(Math.max(0, ms) / 1000);
             ambientAudio.update();
+            audioUpdateAccumulator = 0;
             return Promise.resolve();
         };
         window.render_game_to_text = () => {

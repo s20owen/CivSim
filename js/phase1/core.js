@@ -15,6 +15,18 @@
     const RESOURCE_RESPAWN_MIN = DAY_DURATION * 2;
     const RESOURCE_RESPAWN_MAX = DAY_DURATION * 3;
     const colonistAmount = 8;
+    const BUILD_RING_MIN_DISTANCE = 180;
+    const BUILD_RING_MAX_DISTANCE = 560;
+    const COLONIST_AWARENESS_SCAN_MIN = 0.6;
+    const COLONIST_AWARENESS_SCAN_MAX = 1.1;
+    const COLONIST_THREAT_SCAN_MIN = 0.18;
+    const COLONIST_THREAT_SCAN_MAX = 0.34;
+    const ANIMAL_THREAT_SCAN_MIN = 0.28;
+    const ANIMAL_THREAT_SCAN_MAX = 0.48;
+    const PREDATOR_SCAN_MIN = 0.22;
+    const PREDATOR_SCAN_MAX = 0.42;
+    const HUNT_ACTION_RADIUS = 22;
+    const HUNT_ABORT_DISTANCE = 280;
 
     const resourcesConfig = {
         campStores: {
@@ -639,6 +651,46 @@
         return JSON.parse(JSON.stringify(value));
     }
 
+    class SimpleObjectPool {
+        constructor(createFn, resetFn = null) {
+            this.createFn = createFn;
+            this.resetFn = resetFn;
+            this.free = [];
+            this.active = new Set();
+        }
+
+        acquire(...args) {
+            const item = this.free.pop() || this.createFn(...args);
+            if (this.resetFn) {
+                this.resetFn(item, ...args);
+            }
+            this.active.add(item);
+            return item;
+        }
+
+        release(item) {
+            if (!item || !this.active.has(item)) {
+                return;
+            }
+            this.active.delete(item);
+            this.free.push(item);
+        }
+
+        releaseAll() {
+            for (const item of this.active) {
+                this.free.push(item);
+            }
+            this.active.clear();
+        }
+
+        stats() {
+            return {
+                active: this.active.size,
+                free: this.free.length
+            };
+        }
+    }
+
     function createWeatherManagerState() {
         return {
             type: 'Clear',
@@ -1217,6 +1269,8 @@
             this.path = [];
             this.pathIndex = 0;
             this.pathRecalcCooldown = 0;
+            this.awarenessScanCooldown = 0;
+            this.threatScanCooldown = 0;
             this.lastNeed = 'steady';
             this.threat = null;
             this.threatDistance = Infinity;
@@ -1306,9 +1360,17 @@
             const localWeather = world.getWeatherStateAt(this.x, this.y, {
                 sheltered: distance(this, world.camp) < 44 && world.camp.shelter > 28
             });
-            const threatVisionRadius = world.getWeatherVisibilityRadius(this, 140, { sheltered: localWeather.visibility > 0.82 && distance(this, world.camp) < 36 });
-            this.threat = world.findNearestPredator(this, threatVisionRadius);
-            this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
+            this.threatScanCooldown = Math.max(0, this.threatScanCooldown - dt);
+            if (this.threatScanCooldown <= 0 || !this.threat || !world.predators.includes(this.threat)) {
+                const threatVisionRadius = world.getWeatherVisibilityRadius(this, 140, {
+                    sheltered: localWeather.visibility > 0.82 && distance(this, world.camp) < 36
+                });
+                this.threat = world.findNearestPredator(this, threatVisionRadius);
+                this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
+                this.threatScanCooldown = COLONIST_THREAT_SCAN_MIN + world.rng() * (COLONIST_THREAT_SCAN_MAX - COLONIST_THREAT_SCAN_MIN);
+            } else {
+                this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
+            }
 
             const weather = world.getWeather();
             const season = world.getSeason();
@@ -1402,6 +1464,17 @@
             }
             if (currentStep.action === 'battleEngage' && currentStep.entity.resolved) {
                 return true;
+            }
+            if (currentStep.action === 'huntAnimal' || currentStep.action === 'huntMeal') {
+                if (!currentStep.entity || currentStep.entity.depleted) {
+                    return true;
+                }
+                if (this.stats.energy < 18 || this.stats.health < 34 || this.stats.warmth < 14) {
+                    return true;
+                }
+                if (distance(this, currentStep.entity) > HUNT_ABORT_DISTANCE) {
+                    return true;
+                }
             }
             if (currentStep.kind === 'resource' && currentStep.entity.type === 'water') {
                 return this.stats.thirst > 78 && this.intent !== 'drink';
@@ -1791,7 +1864,8 @@
             }
 
             const destination = step.destination || (step.kind === 'camp' ? world.camp : step.entity);
-            if (distance(this, destination) > 12) {
+            const arrivalRadius = (step.action === 'huntAnimal' || step.action === 'huntMeal') ? HUNT_ACTION_RADIUS : 12;
+            if (distance(this, destination) > arrivalRadius) {
                 this.state = 'moving';
                 this.moveAlongPathOrDirect(destination, dt, world);
                 return;
@@ -1825,6 +1899,12 @@
         }
 
         moveAlongPathOrDirect(target, dt, world) {
+            if (target?.type === 'wildAnimal' || target?.type === 'predator') {
+                this.path = [];
+                this.pathIndex = 0;
+                this.moveToward(target, dt);
+                return;
+            }
             if (this.pathRecalcCooldown <= 0) {
                 this.path = world.findPath(this, target);
                 this.pathIndex = 0;
@@ -1929,6 +2009,12 @@
             this.battleBursts = [];
             this.battleScars = [];
             this.battleReports = [];
+            this.debugFlags = {
+                showBuildRing: false
+            };
+            this.factionEffectPool = new SimpleObjectPool(() => ({ id: '', type: 'trade', label: '', x: 0, y: 0, ttl: 0, maxTtl: 0, targetKind: 'camp' }));
+            this.battleBurstPool = new SimpleObjectPool(() => ({ x: 0, y: 0, ttl: 0, maxTtl: 0, type: 'hit' }));
+            this.landUseRebuildCooldown = 0;
             this.reportCounter = 0;
             this.eraHistory = [];
             this.lastKnownEra = 'survival';
@@ -2629,10 +2715,50 @@
         }
 
         getWorkingSiteMinDistance(type) {
-            if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
-                return this.getPlacementRadius(type) * 2;
+            if (type === 'repairStructure') {
+                return 0;
             }
-            return 0;
+            if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
+                return Math.max(BUILD_RING_MIN_DISTANCE, this.getPlacementRadius(type) * 2);
+            }
+            return BUILD_RING_MIN_DISTANCE;
+        }
+
+        getBuildRingMinDistance() {
+            return BUILD_RING_MIN_DISTANCE;
+        }
+
+        getBuildRingMaxDistance() {
+            return BUILD_RING_MAX_DISTANCE;
+        }
+
+        toggleBuildRingDebug() {
+            this.debugFlags.showBuildRing = !this.debugFlags.showBuildRing;
+            this.pushEvent(`Build ring debug ${this.debugFlags.showBuildRing ? 'enabled' : 'disabled'}.`);
+        }
+
+        getProjectPlacementMarginCells(type) {
+            const span = this.getPlacementSpan(type);
+            return Math.max(VALLEY_RING_CELLS + 1, 1 + Math.ceil(Math.max(span.cols, span.rows) * 0.5));
+        }
+
+        getProjectPlacementBounds(type) {
+            const span = this.getPlacementSpan(type);
+            const marginCells = this.getProjectPlacementMarginCells(type);
+            const minCol = clamp(marginCells, 0, GRID_COLS - span.cols);
+            const minRow = clamp(marginCells, 0, GRID_ROWS - span.rows);
+            const maxCol = clamp(GRID_COLS - span.cols - marginCells, minCol, GRID_COLS - span.cols);
+            const maxRow = clamp(GRID_ROWS - span.rows - marginCells, minRow, GRID_ROWS - span.rows);
+            return { minCol, maxCol, minRow, maxRow };
+        }
+
+        isProjectSiteWithinMapBounds(type, x, y) {
+            const anchor = this.snapProjectSiteToGrid(type, x, y);
+            const bounds = this.getProjectPlacementBounds(type);
+            return anchor.gridCol >= bounds.minCol &&
+                anchor.gridCol <= bounds.maxCol &&
+                anchor.gridRow >= bounds.minRow &&
+                anchor.gridRow <= bounds.maxRow;
         }
 
         normalizeBranchColony(colony, index = 0) {
@@ -3190,6 +3316,21 @@
             this.battleManager.recordBattleReport(report);
         }
 
+        spawnBattleBurst(x, y, ttl = 0.85, type = 'hit') {
+            const burst = this.battleBurstPool.acquire();
+            burst.x = x;
+            burst.y = y;
+            burst.ttl = ttl;
+            burst.maxTtl = ttl;
+            burst.type = type;
+            this.battleBursts.push(burst);
+            if (this.battleBursts.length > 48) {
+                const released = this.battleBursts.shift();
+                this.battleBurstPool.release(released);
+            }
+            return burst;
+        }
+
         applyBattleHit(colonist, damage, front, sourceLabel = 'enemy fighters') {
             if (!colonist?.alive) {
                 return;
@@ -3202,13 +3343,12 @@
             colonist.woundSeverity = clamp(colonist.woundSeverity + damage * 0.09, 0, 1);
             colonist.woundCount = Math.min(6, colonist.woundCount + (damage > 4 ? 2 : 1));
             colonist.emotionalMemory.battleTrauma = clamp((colonist.emotionalMemory?.battleTrauma || 0) + damage * 0.012, 0, 1);
-            this.battleBursts.push({
-                x: colonist.x + (this.rng() - 0.5) * 10,
-                y: colonist.y + (this.rng() - 0.5) * 10,
-                ttl: 0.85,
-                maxTtl: 0.85,
-                type: 'hit'
-            });
+            this.spawnBattleBurst(
+                colonist.x + (this.rng() - 0.5) * 10,
+                colonist.y + (this.rng() - 0.5) * 10,
+                0.85,
+                'hit'
+            );
             if (colonist.stats.health <= 0 && colonist.alive) {
                 colonist.alive = false;
                 this.pushEvent(`${colonist.name} was killed by ${sourceLabel}.`);
@@ -3527,24 +3667,31 @@
         }
 
         spawnFactionEffect(party) {
-            this.factionEffects.push({
-                id: `${party.id}:effect`,
-                type: party.type,
-                label: party.effectLabel,
-                x: party.targetX,
-                y: party.targetY,
-                ttl: party.type === 'raid' ? 3.4 : 2.6,
-                maxTtl: party.type === 'raid' ? 3.4 : 2.6,
-                targetKind: party.targetKind
-            });
-            this.factionEffects = this.factionEffects.slice(-24);
+            const effect = this.factionEffectPool.acquire();
+            effect.id = `${party.id}:effect`;
+            effect.type = party.type;
+            effect.label = party.effectLabel;
+            effect.x = party.targetX;
+            effect.y = party.targetY;
+            effect.ttl = party.type === 'raid' ? 3.4 : 2.6;
+            effect.maxTtl = effect.ttl;
+            effect.targetKind = party.targetKind;
+            this.factionEffects.push(effect);
+            if (this.factionEffects.length > 24) {
+                const released = this.factionEffects.shift();
+                this.factionEffectPool.release(released);
+            }
         }
 
         updateFactionEffects(dt) {
-            for (const effect of this.factionEffects) {
+            for (let index = this.factionEffects.length - 1; index >= 0; index -= 1) {
+                const effect = this.factionEffects[index];
                 effect.ttl = Math.max(0, effect.ttl - dt * 0.06);
+                if (effect.ttl <= 0) {
+                    this.factionEffects.splice(index, 1);
+                    this.factionEffectPool.release(effect);
+                }
             }
-            this.factionEffects = this.factionEffects.filter((effect) => effect.ttl > 0);
         }
 
         recordFactionEvent(message) {
@@ -4503,6 +4650,7 @@
                 velocityAngle: this.rng() * Math.PI * 2,
                 velocitySpeed: 12 + this.rng() * 10,
                 panicTimer: 0,
+                scanCooldown: 0,
                 depleted: false,
                 respawnDelay: RESOURCE_RESPAWN_MIN + this.rng() * (RESOURCE_RESPAWN_MAX - RESOURCE_RESPAWN_MIN),
                 respawnTimer: 0
@@ -4522,8 +4670,11 @@
                 velocityAngle: this.rng() * Math.PI * 2,
                 velocitySpeed: 16 + this.rng() * 8,
                 attackCooldown: 0,
+                scanCooldown: 0,
                 targetColonistId: null,
-                retreatTimer: 0
+                retreatTimer: 0,
+                nearbyDefenderCount: 0,
+                nearbyDefenderId: null
             };
         }
 
@@ -4657,7 +4808,11 @@
             this.updatePredators(scaledDt);
 
             for (const colonist of this.colonists) {
-                this.observeNearbyResources(colonist);
+                colonist.awarenessScanCooldown = Math.max(0, (colonist.awarenessScanCooldown || 0) - scaledDt);
+                if (colonist.awarenessScanCooldown <= 0) {
+                    this.observeNearbyResources(colonist);
+                    colonist.awarenessScanCooldown = COLONIST_AWARENESS_SCAN_MIN + this.rng() * (COLONIST_AWARENESS_SCAN_MAX - COLONIST_AWARENESS_SCAN_MIN);
+                }
                 colonist.update(scaledDt, this);
             }
             this.colonists = this.colonists.filter((colonist) => {
@@ -5912,18 +6067,24 @@
                             animal.velocityAngle = this.rng() * Math.PI * 2;
                             animal.velocitySpeed = 10 + this.rng() * 8;
                             animal.panicTimer = 0;
+                            animal.scanCooldown = 0;
                         }
                     }
                     continue;
                 }
                 animal.panicTimer = Math.max(0, animal.panicTimer - dt);
-                const nearestThreat = this.findNearestColonist(animal, 90);
+                animal.scanCooldown = Math.max(0, (animal.scanCooldown || 0) - dt);
+                let nearestThreat = null;
+                if (animal.scanCooldown <= 0) {
+                    nearestThreat = this.findNearestColonist(animal, 80);
+                    animal.scanCooldown = ANIMAL_THREAT_SCAN_MIN + this.rng() * (ANIMAL_THREAT_SCAN_MAX - ANIMAL_THREAT_SCAN_MIN);
+                }
                 if (nearestThreat) {
                     animal.velocityAngle = Math.atan2(animal.y - nearestThreat.y, animal.x - nearestThreat.x);
-                    animal.velocitySpeed = 48;
-                    animal.panicTimer = 2.6;
+                    animal.velocitySpeed = 34;
+                    animal.panicTimer = 1.9;
                 } else if (animal.panicTimer > 0) {
-                    animal.velocitySpeed = 30;
+                    animal.velocitySpeed = 22;
                 } else if (this.rng() < 0.02) {
                     animal.velocityAngle += (this.rng() - 0.5) * 0.9;
                     animal.velocitySpeed = 10 + this.rng() * 10;
@@ -5956,22 +6117,36 @@
             for (const predator of this.predators) {
                 predator.attackCooldown = Math.max(0, predator.attackCooldown - dt);
                 predator.retreatTimer = Math.max(0, predator.retreatTimer - dt);
+                predator.scanCooldown = Math.max(0, (predator.scanCooldown || 0) - dt);
                 const nearCamp = distance(predator, this.camp) < (120 + predatorCaution * 30);
                 const campDeterrence = nearCamp && this.camp.fireFuel > 8 ? 1 + predatorCaution * 0.6 : 0;
-                const focusedTarget = this.colonists.find((colonist) =>
+                let target = this.colonists.find((colonist) =>
                     colonist.alive && colonist.id === predator.targetColonistId
                 ) || null;
-                const weatherScanRadius = this.getWeatherVisibilityRadius(predator, 180 - predatorCaution * 20);
-                const target = focusedTarget && distance(predator, focusedTarget) < this.getWeatherVisibilityRadius(predator, 260) * this.getWeatherStealthFactor(focusedTarget)
-                    ? focusedTarget
-                    : this.findNearestColonist(predator, weatherScanRadius);
-                const defenders = this.colonists.filter((colonist) =>
-                    colonist.alive &&
-                    colonist.intent === 'protect' &&
-                    distance(colonist, predator) < this.getWeatherVisibilityRadius(colonist, 70)
-                );
+                let defenders = predator.nearbyDefenderId
+                    ? this.colonists.filter((colonist) => colonist.alive && colonist.id === predator.nearbyDefenderId)
+                    : [];
+                if (predator.scanCooldown <= 0 || !target) {
+                    const weatherScanRadius = this.getWeatherVisibilityRadius(predator, 180 - predatorCaution * 20);
+                    const focusedTarget = target && distance(predator, target) < this.getWeatherVisibilityRadius(predator, 260) * this.getWeatherStealthFactor(target)
+                        ? target
+                        : null;
+                    target = focusedTarget || this.findNearestColonist(predator, weatherScanRadius);
+                    defenders = this.colonists.filter((colonist) =>
+                        colonist.alive &&
+                        colonist.intent === 'protect' &&
+                        distance(colonist, predator) < this.getWeatherVisibilityRadius(colonist, 70)
+                    );
+                    predator.targetColonistId = target ? target.id : null;
+                    predator.nearbyDefenderCount = defenders.length;
+                    predator.nearbyDefenderId = defenders[0]?.id ?? null;
+                    predator.scanCooldown = PREDATOR_SCAN_MIN + this.rng() * (PREDATOR_SCAN_MAX - PREDATOR_SCAN_MIN);
+                } else if (target && distance(predator, target) > this.getWeatherVisibilityRadius(predator, 260) * this.getWeatherStealthFactor(target)) {
+                    target = null;
+                    predator.targetColonistId = null;
+                }
 
-                if (defenders.length >= 2 || campDeterrence > 0) {
+                if ((predator.nearbyDefenderCount || defenders.length) >= 2 || campDeterrence > 0) {
                     predator.retreatTimer = Math.max(predator.retreatTimer, 4.5 + campDeterrence);
                     predator.targetColonistId = null;
                 }
@@ -6576,6 +6751,26 @@
                 return this.projects.length;
             }
             return this.projects.filter((project) => project.type === type).length;
+        }
+
+        getActiveBuildCount(type) {
+            return this.countBuildings(type) + this.countProjects(type);
+        }
+
+        getBuildingSoftCap(type) {
+            const population = this.colonists.length;
+            if (type === 'workshop') {
+                return this.hasTechnology('engineering') && population >= 10 ? 2 : 1;
+            }
+            if (type === 'storagePit' || type === 'storage' || type === 'granary' || type === 'warehouse') {
+                return 1;
+            }
+            return Infinity;
+        }
+
+        isBuildingSoftCapped(type) {
+            const cap = this.getBuildingSoftCap(type);
+            return Number.isFinite(cap) && this.getActiveBuildCount(type) >= cap;
         }
 
         getBuildingCapacity() {
@@ -7889,6 +8084,9 @@
         }
 
         canPursueBuilding(type) {
+            if (this.isBuildingSoftCapped(type)) {
+                return false;
+            }
             const projected = this.getProjectedBuildingRequirements(type);
             const checks = {
                 campfire: () => this.camp.structures.firePit > 0,
@@ -8174,8 +8372,9 @@
 
         snapProjectSiteToGrid(type, x, y) {
             const span = this.getPlacementSpan(type);
-            const col = clamp(Math.round(x / CELL_WIDTH) - Math.floor(span.cols / 2), 0, GRID_COLS - span.cols);
-            const row = clamp(Math.round(y / CELL_HEIGHT) - Math.floor(span.rows / 2), 0, GRID_ROWS - span.rows);
+            const bounds = this.getProjectPlacementBounds(type);
+            const col = clamp(Math.round(x / CELL_WIDTH) - Math.floor(span.cols / 2), bounds.minCol, bounds.maxCol);
+            const row = clamp(Math.round(y / CELL_HEIGHT) - Math.floor(span.rows / 2), bounds.minRow, bounds.maxRow);
             return {
                 x: col * CELL_WIDTH + CELL_WIDTH * span.cols * 0.5,
                 y: row * CELL_HEIGHT + CELL_HEIGHT * span.rows * 0.5,
@@ -8261,7 +8460,13 @@
                 if (span.cols === 1 && span.rows === 1 && !Number.isFinite(entry.gridCol) && !Number.isFinite(entry.gridRow)) {
                     return;
                 }
-                const anchor = this.findOpenAnchor(type, entry.x, entry.y, occupied);
+                const existingAnchor = Number.isFinite(entry.gridCol) && Number.isFinite(entry.gridRow)
+                    ? this.getEntryAnchor(entry, type)
+                    : null;
+                let anchor = existingAnchor;
+                if (!anchor || !this.isFootprintOpen(type, anchor, occupied)) {
+                    anchor = this.findOpenAnchor(type, entry.x, entry.y, occupied);
+                }
                 this.assignEntryAnchor(entry, type, anchor);
                 this.markFootprint(type, anchor, occupied);
             };
@@ -8282,9 +8487,12 @@
 
         getWorkingSiteRadius(type) {
             if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
-                return 210;
+                return Math.min(210, BUILD_RING_MAX_DISTANCE);
             }
-            return Infinity;
+            if (type === 'repairStructure') {
+                return Infinity;
+            }
+            return BUILD_RING_MAX_DISTANCE;
         }
 
         isProjectSiteWithinWorkingRange(type, x, y) {
@@ -8323,6 +8531,9 @@
         }
 
         isProjectSiteOpen(type, x, y, options = {}) {
+            if (!this.isProjectSiteWithinMapBounds(type, x, y)) {
+                return false;
+            }
             if (!this.isProjectSiteWithinWorkingRange(type, x, y)) {
                 return false;
             }
@@ -8358,10 +8569,7 @@
             const attempts = options.attempts || 18;
             const spread = options.spread || Math.max(18, this.getPlacementRadius(type) * 0.8);
             if (this.isProjectSiteOpen(type, origin.x, origin.y, options)) {
-                return {
-                    x: clamp(origin.x, 50, this.width - 50),
-                    y: clamp(origin.y, 50, this.height - 50)
-                };
+                return this.snapProjectSiteToGrid(type, origin.x, origin.y);
             }
             for (let attempt = 0; attempt < attempts; attempt += 1) {
                 const angle = this.rng() * Math.PI * 2;
@@ -8704,6 +8912,14 @@
                     cell.biome = 'grassland';
                 }
             }
+            this.landUseRebuildCooldown = Math.max(0, (this.landUseRebuildCooldown || 0) - dt);
+            if (this.landUse && this.landUseRebuildCooldown > 0) {
+                return;
+            }
+            const coarsePointer = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+                ? window.matchMedia('(pointer: coarse)').matches
+                : false;
+            this.landUseRebuildCooldown = coarsePointer ? 1.6 : 0.7;
             const districtDefs = [
                 {
                     type: 'housing',
@@ -9372,13 +9588,16 @@
                     continue;
                 }
                 const nextDistance = distance(origin, animal);
+                const campDistance = distance(this.camp, animal);
                 const assignmentPenalty = this.getEntityAssignmentPenalty(animal, origin);
                 const yieldBonus = options.preferYield ? 24 : 12;
                 const nextScore = nextDistance +
                     assignmentPenalty +
                     this.getDangerPenalty(animal, origin) -
                     this.getMemoryBonus(animal, origin, 'wildAnimal') +
-                    (animal.panicTimer > 0 ? 22 : 0) -
+                    (animal.panicTimer > 0 ? 38 + animal.panicTimer * 8 : 0) +
+                    Math.max(0, campDistance - 220) * 0.2 +
+                    Math.max(0, nextDistance - 180) * 0.25 -
                     yieldBonus;
                 if (nextScore < bestScore) {
                     best = animal;
@@ -10770,6 +10989,7 @@
                     battleScars: clone(this.battleScars),
                     battleReports: clone(this.battleReports),
                     reportCounter: this.reportCounter,
+                    debugFlags: clone(this.debugFlags),
                     godMode: clone(this.godMode),
                     warAftermath: clone(this.warAftermath),
                     achievements: clone(this.achievements),
@@ -10863,6 +11083,10 @@
             this.battleScars = clone(state.battleScars || []);
             this.battleReports = clone(state.battleReports || []);
             this.reportCounter = state.reportCounter ?? 0;
+            this.debugFlags = {
+                ...clone(this.debugFlags || {}),
+                ...(clone(state.debugFlags || {}) || {})
+            };
             this.godMode = clone(state.godMode || this.godMode);
             this.warAftermath = clone(state.warAftermath || this.warAftermath);
             this.achievements = clone(state.achievements || []);
@@ -10881,6 +11105,7 @@
             this.institutionLife = clone(state.institutionLife || this.institutionLife);
             this.knownInstitutions = clone(state.knownInstitutions || []);
             this.landUse = clone(state.landUse || this.landUse);
+            this.landUseRebuildCooldown = 0;
             this.camp = clone(state.camp || this.camp);
             this.terrain = clone(state.terrain || null);
             this.resources = clone(state.resources || []);
@@ -11994,5 +12219,6 @@
     };
     PhaseOneSim.clamp = clamp;
     PhaseOneSim.distance = distance;
+    PhaseOneSim.SimpleObjectPool = SimpleObjectPool;
     PhaseOneSim.PhaseOneWorld = PhaseOneWorld;
 })();
