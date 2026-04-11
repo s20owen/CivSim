@@ -1367,7 +1367,11 @@
                     refugee: '#d7d2bb'
                 };
                 const color = colors[party.type] || '#ffffff';
-                const memberCount = Math.max(2, Math.min(5, Math.round((party.strength || 1) * 1.35)));
+                const memberCount = party.type === 'aid' || party.type === 'trade'
+                    ? Math.max(1, Math.min(2, Math.round((party.strength || 1) * 0.95)))
+                    : party.type === 'knowledge'
+                        ? 1
+                        : Math.max(2, Math.min(4, Math.round((party.strength || 1) * 1.15)));
                 const offsets = [
                     { x: 0, y: 0 },
                     { x: -7, y: 4 },
@@ -1406,7 +1410,12 @@
         }
 
         drawBranchColonySettlers(ctx, colony) {
-            const count = Math.max(2, Math.min(4, Math.round(colony.population || 2)));
+            const nearbyPartyCount = (this.world.factionParties || []).filter((party) =>
+                party.targetColonyId === colony.id &&
+                Math.hypot((party.x || 0) - colony.x, (party.y || 0) - colony.y) < 56
+            ).length;
+            const maxVisible = nearbyPartyCount > 0 ? 1 : 2;
+            const count = Math.max(1, Math.min(maxVisible, Math.round((colony.population || 2) / 2)));
             for (let i = 0; i < count; i += 1) {
                 const pseudo = {
                     id: `${colony.id}:settler:${i}`,
@@ -2036,7 +2045,7 @@
                 let drewRoofSprite = false;
                 if (building.type === 'hut') {
                     drewRoofSprite = this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutRoof, {
-                        yOffset: -CELL_HEIGHT * 2,
+                        yOffset: -CELL_HEIGHT * 0.28,
                         drawWidth: CELL_WIDTH * 2,
                         drawHeight: CELL_HEIGHT * 2,
                         sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY,

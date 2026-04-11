@@ -62,6 +62,7 @@
     const WEATHER_TYPES = [
         { name: 'Clear', temperature: 0, moisture: 0, thirst: 1, warmth: 1, color: 'rgba(255, 223, 142, 0.08)' },
         { name: 'Cloudy', temperature: -1, moisture: 0.08, thirst: 0.96, warmth: 1.04, color: 'rgba(112, 126, 142, 0.09)' },
+        { name: 'Fog', temperature: -2, moisture: 0.12, thirst: 0.98, warmth: 1.06, color: 'rgba(188, 198, 206, 0.13)' },
         { name: 'Rain', temperature: -2, moisture: 0.35, thirst: 0.88, warmth: 1.18, color: 'rgba(104, 158, 196, 0.12)' },
         { name: 'Storm', temperature: -5, moisture: 0.28, thirst: 0.96, warmth: 1.35, color: 'rgba(72, 92, 126, 0.18)' },
         { name: 'Cold Snap', temperature: -11, moisture: -0.08, thirst: 0.92, warmth: 1.62, color: 'rgba(176, 206, 255, 0.14)' },
@@ -95,6 +96,20 @@
             splashRate: 0,
             leafDrift: 0.14,
             ambient: 'cloudy',
+            transitionSeconds: 4
+        },
+        Fog: {
+            precipitationType: 'none',
+            intensity: 0.18,
+            fogDensity: 0.42,
+            darkness: 0.09,
+            dustDensity: 0,
+            wetnessTarget: 0.1,
+            puddleTarget: 0.02,
+            snowTarget: 0,
+            splashRate: 0,
+            leafDrift: 0.04,
+            ambient: 'fog',
             transitionSeconds: 4
         },
         Rain: {
@@ -2609,8 +2624,15 @@
 
         getColonySupportCooldownDuration(colony, variance = 18, base = null) {
             const isDaughter = (colony?.type || 'daughter') === 'daughter';
-            const anchor = base ?? (isDaughter ? 52 : 40);
+            const anchor = base ?? (isDaughter ? 96 : 40);
             return anchor + this.rng() * variance;
+        }
+
+        getWorkingSiteMinDistance(type) {
+            if (type === 'farmPlot' || type === 'engineeredFarm' || type === 'irrigation' || type === 'canal') {
+                return this.getPlacementRadius(type) * 2;
+            }
+            return 0;
         }
 
         normalizeBranchColony(colony, index = 0) {
@@ -2654,8 +2676,8 @@
                 water: Number.isFinite(colony.water) ? colony.water : 9,
                 wood: Number.isFinite(colony.wood) ? colony.wood : 6,
                 stone: Number.isFinite(colony.stone) ? colony.stone : 4,
-                tradeCooldown: Number.isFinite(colony.tradeCooldown) ? colony.tradeCooldown : (daughterBias ? 22 + this.rng() * 14 : 32 + this.rng() * 18),
-                infoCooldown: Number.isFinite(colony.infoCooldown) ? colony.infoCooldown : (daughterBias ? 18 + this.rng() * 14 : 24 + this.rng() * 18),
+                tradeCooldown: Number.isFinite(colony.tradeCooldown) ? colony.tradeCooldown : (daughterBias ? 58 + this.rng() * 30 : 32 + this.rng() * 18),
+                infoCooldown: Number.isFinite(colony.infoCooldown) ? colony.infoCooldown : (daughterBias ? 84 + this.rng() * 40 : 24 + this.rng() * 18),
                 raidCooldown: Number.isFinite(colony.raidCooldown) ? colony.raidCooldown : 34 + this.rng() * 14,
                 diplomacyCooldown: Number.isFinite(colony.diplomacyCooldown) ? colony.diplomacyCooldown : 10 + this.rng() * 12,
                 supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : this.getColonySupportCooldownDuration(colony, colony.type === 'daughter' ? 18 : 12, colony.type === 'daughter' ? 54 : 40),
@@ -3128,6 +3150,36 @@
             }
             const threshold = colonist.assignedBattlefrontId === battlefront.id ? 42 : 50;
             return colonist.stats.health > threshold && colonist.stats.energy > 34 && colonist.stats.warmth > 20;
+        }
+
+        mobilizeDefendersForBattlefront(front, target = null) {
+            if (!front || front.mode === 'outbound' || front.mode === 'intercolonial') {
+                return [];
+            }
+            const anchor = target || front;
+            const defenders = this.colonists
+                .filter((colonist) =>
+                    colonist.alive &&
+                    colonist.lifeStage === 'adult' &&
+                    colonist.stats.health > 42 &&
+                    colonist.stats.energy > 28 &&
+                    distance(colonist, anchor) < 170
+                )
+                .sort((left, right) =>
+                    ((right.skills.combat || 0) + (right.combatPower || 0) * 0.08) -
+                    ((left.skills.combat || 0) + (left.combatPower || 0) * 0.08)
+                )
+                .slice(0, Math.max(2, Math.min(7, Math.round(2 + front.scale * 5))));
+            if (!defenders.length) {
+                return [];
+            }
+            this.battleManager.ensureInboundDefenderAssignments(front, defenders);
+            for (const colonist of defenders) {
+                colonist.intent = 'war';
+                colonist.state = 'moving';
+                colonist.decisionCooldown = 0;
+            }
+            return defenders;
         }
 
         updateBattlefronts(dt) {
@@ -4802,6 +4854,9 @@
         }
 
         resolveFactionBattleSupport(colony) {
+            if (colony.type === 'daughter') {
+                return;
+            }
             if (colony.diplomacyState !== 'allied' || colony.supportCooldown > 0) {
                 return;
             }
@@ -4865,7 +4920,7 @@
 
         resolveMainAllianceRelief() {
             const targetColony = this.getActiveBranchColonies()
-                .filter((colony) => colony.diplomacyState === 'allied')
+                .filter((colony) => colony.type !== 'daughter' && colony.diplomacyState === 'allied')
                 .map((colony) => ({ colony, threat: this.getColonyThreatScore(colony) }))
                 .filter((entry) => entry.threat > 0.46)
                 .sort((left, right) => right.threat - left.threat)[0]?.colony || null;
@@ -5273,6 +5328,9 @@
         }
 
         resolveFactionCampaignSupport(colony) {
+            if (colony.type === 'daughter') {
+                return false;
+            }
             let supported = false;
             const project = this.projects.find((entry) => ['wall', 'warehouse', 'fortifiedStructure', 'house', 'foodHall'].includes(entry.type));
             const canSendStone = colony.stone > 8 && this.camp.stone < 18;
@@ -5329,6 +5387,7 @@
             if (supported) {
                 colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 22, colony.type === 'daughter' ? 64 : 44);
             }
+            return supported;
         }
 
         getFactionDefenseSummary(colony) {
@@ -5366,6 +5425,10 @@
             if (!['cautious', 'trading', 'allied'].includes(state)) {
                 return;
             }
+            if (this.hasActiveFactionPartyRoute(colony, { types: ['trade', 'aid', 'knowledge'] })) {
+                colony.tradeCooldown = Math.max(colony.tradeCooldown || 0, colony.type === 'daughter' ? 26 + this.rng() * 14 : 10 + this.rng() * 8);
+                return;
+            }
             let traded = false;
             const strategicProject = this.projects.find((project) =>
                 ['wall', 'warehouse', 'fortifiedStructure', 'house', 'foodHall', 'mill', 'granary'].includes(project.type)
@@ -5384,6 +5447,18 @@
             const canSendPlanks = strategicNeed && this.hasTechnology('engineering') && colony.wood > 10 && this.getCampMaterial('planks') < 10;
             const canSendRope = strategicNeed && this.hasTechnology('engineering') && colony.wood > 8 && this.getCampMaterial('rope') < 5;
             const canSendKnowledge = cooperativePush && (state === 'allied' || colony.history.trades >= 2);
+            const daughterUrgentNeed = colony.type === 'daughter' && (
+                canSendStone ||
+                canSendWood ||
+                canSendPlanks ||
+                canSendRope ||
+                (this.camp.food < 16 && colony.food > 22) ||
+                (this.camp.water < 7 && colony.water > 18)
+            );
+            if (colony.type === 'daughter' && !daughterUrgentNeed) {
+                colony.tradeCooldown = 72 + this.rng() * 38;
+                return;
+            }
             if (state !== 'cautious' && canSendStone) {
                 const amount = Math.min(3, colony.stone - 6);
                 colony.stone -= amount;
@@ -5518,7 +5593,11 @@
                         settlement.defenseTier = Math.max(settlement.defenseTier || 0, ['wall', 'fortifiedStructure'].includes(strategicProject.type) ? 2 : settlement.defenseTier || 0);
                     }
                 }
-                colony.tradeCooldown = cooperativePush ? 24 + this.rng() * 18 : 42 + this.rng() * 28;
+                colony.tradeCooldown = colony.type === 'daughter'
+                    ? 88 + this.rng() * 44
+                    : cooperativePush
+                        ? 24 + this.rng() * 18
+                        : 42 + this.rng() * 28;
             }
         }
 
@@ -5526,6 +5605,19 @@
             const state = colony.diplomacyState || 'unknown';
             if (!['trading', 'allied', 'cautious'].includes(state)) {
                 return;
+            }
+            if (this.hasActiveFactionPartyRoute(colony, { types: ['knowledge', 'trade', 'aid'] })) {
+                colony.infoCooldown = Math.max(colony.infoCooldown || 0, colony.type === 'daughter' ? 45 + this.rng() * 20 : 18 + this.rng() * 10);
+                return;
+            }
+            if (colony.type === 'daughter') {
+                const shouldShare = state === 'allied' &&
+                    this.hasTechnology('engineering') &&
+                    this.rng() < 0.22;
+                if (!shouldShare) {
+                    colony.infoCooldown = 110 + this.rng() * 48;
+                    return;
+                }
             }
             const sharedWater = this.colonyKnowledge.resources.water[0];
             const sharedDanger = this.colonyKnowledge.dangerZones[0];
@@ -5558,7 +5650,7 @@
                 status: 'messengers',
                 effectLabel: 'Knowledge'
             });
-            colony.infoCooldown = 65 + this.rng() * 35;
+            colony.infoCooldown = colony.type === 'daughter' ? 118 + this.rng() * 54 : 65 + this.rng() * 35;
         }
 
         resolveFactionRaid(colony) {
@@ -5606,135 +5698,36 @@
                 0,
                 1
             );
-            if (skirmish) {
-                colony.history.skirmishes += 1;
-                const defenders = this.colonists
-                    .filter((colonist) => colonist.alive && colonist.lifeStage !== 'child')
-                    .sort((left, right) => right.skills.combat - left.skills.combat)
-                    .slice(0, Math.max(1, Math.min(4, Math.round(colony.population / 2 + battleScale * 2))));
-                for (const colonist of defenders) {
-                    colonist.stats.health = clamp(colonist.stats.health - (attackPower > defensePower ? 7 + battleScale * 6 : 4 + battleScale * 3), 0, 100);
-                    colonist.state = attackPower > defensePower ? 'hurt' : colonist.state;
-                }
-                this.recordFactionEvent(`${colony.name} clashed with the main settlement in a border skirmish.`);
-            }
-            if (attackPower > defensePower) {
-                this.applyBuildingDamage(vulnerable, 2.4 + battleScale * 1.8);
-                const foodLoss = Math.min(9, Math.max(2, colony.population + battleScale * 3));
-                const woodLoss = Math.min(5, Math.max(1, colony.population * 0.5 + battleScale * 2));
-                this.camp.food = Math.max(0, this.camp.food - foodLoss);
-                this.camp.wood = Math.max(0, this.camp.wood - woodLoss);
-                colony.food = clamp(colony.food + foodLoss * 0.7, 0, 140);
-                colony.wood = clamp(colony.wood + woodLoss * 0.7, 0, 80);
-                colony.history.raids += 1;
-                colony.recentAction = 'raiding';
-                if (battleScale > 0.52) {
-                    const extraTargets = this.buildings
-                        .filter((building) => building !== vulnerable && ['storage', 'storagePit', 'granary', 'warehouse', 'leanTo', 'hut', 'cottage', 'kitchen', 'foodHall', 'campfire', 'wall', 'watchtower'].includes(building.type))
-                        .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))
-                        .slice(0, 2);
-                    for (const target of extraTargets) {
-                        this.applyBuildingDamage(target, 1 + battleScale * 1.2);
-                        this.startRepairProject(target);
-                    }
-                    this.recordFactionEvent(`${colony.name} escalated the frontier fighting into a larger battle.`);
-                    colony.history.campaigns += 1;
-                    if (this.colonists.length > 5 && this.rng() < 0.35) {
-                        colony.history.refugees += 1;
-                        this.recordFactionEvent(`Families fled inward after the larger battle with ${colony.name}.`);
-                    }
-                }
-                if (campaignPressure > 0.48) {
-                    colony.campaign.pressure = clamp(campaignPressure + 0.06, 0, 1);
-                }
-                this.spawnFactionParty(colony, 'raid', 'toCamp', {
-                    strength: Math.max(1.5, colony.population * (0.35 + campaignPressure * 0.18 + battleScale * 0.18)),
-                    status: strategy === 'raid' ? warfareMethod : battleScale > 0.52 ? this.getEraWarfareMethod('total war') : warfareMethod,
-                    effectLabel: strategy === 'raid' ? 'Raid' : battleScale > 0.52 ? 'Battle' : 'Raid',
-                    target: vulnerable,
-                    targetKind: 'building'
-                });
-                if (skirmish || battleScale > 0.35) {
-                    this.spawnBattlefront(colony, {
-                        target: vulnerable,
-                        targetBuildingId: vulnerable.id,
-                        targetBuildingType: vulnerable.type,
-                        reportType: battleScale > 0.52 ? 'large battle' : skirmish ? 'skirmish' : 'battle',
-                        initialDefenderCount: this.colonists.filter((colonist) =>
-                            colonist.alive &&
-                            colonist.lifeStage !== 'child' &&
-                            distance(colonist, vulnerable) < 90
-                        ).length,
-                        scale: Math.max(0.28, battleScale),
-                        attackerHealth: attackPower * (1.8 + battleScale),
-                        defenderHealth: Math.max(8, defensePower * (2 + battleScale * 0.6)),
-                        strength: Math.max(2, colony.population * (0.45 + battleScale * 0.3))
-                    });
-                }
-                this.lastRaid = {
-                    by: colony.name,
-                    target: vulnerable.type,
-                    day: this.day,
-                    year: this.year
-                };
-                if (this.rng() < 0.26 && this.colonists.length > 4) {
-                    colony.history.prisoners += 1;
-                    this.recordFactionEvent(`${colony.name} carried off a prisoner after the raid on the ${vulnerable.type}.`);
-                }
-                this.recordFactionEvent(
-                    strategy === 'raid'
-                        ? `${colony.name} launched ${warfareMethod} against the ${vulnerable.type} and stole supplies.`
-                        : `${colony.name} struck the ${vulnerable.type} with ${warfareMethod} and stole supplies.`
-                );
-                this.recordBattleReport({
-                    type: battleScale > 0.52 ? 'large battle' : 'raid',
-                    colonyName: colony.name,
-                    outcome: 'attackers hit stores',
-                    attackerStrength: Number(attackPower.toFixed(1)),
-                    defenderStrength: Number(defensePower.toFixed(1)),
-                    targetBuildingType: vulnerable.type,
-                    tactic: strategy,
+            colony.recentAction = 'raiding';
+            const front = this.spawnBattlefront(colony, {
+                target: vulnerable,
+                colonySource: colony,
+                targetBuildingId: vulnerable.id,
+                targetBuildingType: vulnerable.type,
+                reportType: battleScale > 0.52 ? 'large battle' : skirmish ? 'skirmish' : 'battle',
+                initialDefenderCount: this.colonists.filter((colonist) =>
+                    colonist.alive &&
+                    colonist.lifeStage !== 'child' &&
+                    distance(colonist, vulnerable) < 170
+                ).length,
+                scale: Math.max(0.28, battleScale),
+                attackerHealth: attackPower * (1.8 + battleScale),
+                defenderHealth: Math.max(8, defensePower * (2 + battleScale * 0.6)),
+                strength: Math.max(2, colony.population * (0.45 + battleScale * 0.3)),
+                raidContext: {
+                    strategy,
                     warfareMethod,
-                    routeQuality: Number(routeProfile.quality.toFixed(2)),
-                    damagedBuildings: 1 + (battleScale > 0.52 ? Math.min(2, this.buildings.filter((building) => this.getBuildingIntegrityRatio(building) < 1).length - 1) : 0),
-                    foodLoss: Number(foodLoss.toFixed(1)),
-                    woodLoss: Number(woodLoss.toFixed(1)),
-                    prisoners: colony.history.prisoners || 0,
-                    refugees: colony.history.refugees || 0
-                });
-                this.applyFactionWarAftermath(colony, 'victory', battleScale, {
-                    enemy: 'main settlement',
-                    targetBuildingType: vulnerable.type
-                });
-                this.startRepairProject(vulnerable);
-            } else {
-                colony.factionIdentity.fear = clamp(colony.factionIdentity.fear + 0.06, 0.05, 0.95);
-                colony.factionIdentity.trust = clamp(colony.factionIdentity.trust - 0.04, 0.05, 0.95);
-                colony.recentAction = 'repelled';
-                if (campaignPressure > 0.25) {
-                    colony.campaign.pressure = clamp(campaignPressure - 0.08, 0, 1);
+                    campaignPressure,
+                    routeQuality: Number(routeProfile.quality.toFixed(2))
                 }
-                this.recordFactionEvent(`The main settlement repelled raiders from ${colony.name}.`);
-                this.recordBattleReport({
-                    type: battleScale > 0.52 ? 'large battle' : 'raid',
-                    colonyName: colony.name,
-                    outcome: 'defenders repelled attackers',
-                    attackerStrength: Number(attackPower.toFixed(1)),
-                    defenderStrength: Number(defensePower.toFixed(1)),
-                    targetBuildingType: vulnerable.type,
-                    tactic: strategy,
-                    warfareMethod,
-                    routeQuality: Number(routeProfile.quality.toFixed(2)),
-                    damagedBuildings: 0,
-                    foodLoss: 0,
-                    woodLoss: 0,
-                    prisoners: colony.history.prisoners || 0,
-                    refugees: colony.history.refugees || 0
-                });
-                this.applyFactionWarAftermath(colony, 'defeat', battleScale, {
-                    enemy: 'main settlement',
-                    targetBuildingType: vulnerable.type
-                });
+            });
+            if (front) {
+                const defenders = this.mobilizeDefendersForBattlefront(front, front);
+                if (defenders.length > 0) {
+                    this.recordFactionEvent(`${colony.name} advanced on the ${vulnerable.type}, and the colony rushed defenders to meet them.`);
+                } else {
+                    this.recordFactionEvent(`${colony.name} advanced on the ${vulnerable.type} before the defenders fully formed.`);
+                }
             }
             colony.raidCooldown = 56 + this.rng() * 36;
         }
@@ -8296,10 +8289,37 @@
 
         isProjectSiteWithinWorkingRange(type, x, y) {
             const maxDistance = this.getWorkingSiteRadius(type);
+            const minDistance = this.getWorkingSiteMinDistance(type);
+            const campDistance = distance({ x, y }, this.camp);
+            if (campDistance < minDistance) {
+                return false;
+            }
             if (!Number.isFinite(maxDistance)) {
                 return true;
             }
-            return distance({ x, y }, this.camp) <= maxDistance;
+            return campDistance <= maxDistance;
+        }
+
+        hasActiveFactionPartyRoute(colony, options = {}) {
+            const colonyId = typeof colony === 'object' ? colony?.id : colony;
+            const types = options.types ? new Set(options.types) : null;
+            const direction = options.direction || null;
+            const targetColonyId = options.targetColonyId || null;
+            return (this.factionParties || []).some((party) => {
+                if (party.progress >= 1 || party.colonyId !== colonyId) {
+                    return false;
+                }
+                if (types && !types.has(party.type)) {
+                    return false;
+                }
+                if (direction && party.direction !== direction) {
+                    return false;
+                }
+                if (targetColonyId != null && party.targetColonyId !== targetColonyId) {
+                    return false;
+                }
+                return true;
+            });
         }
 
         isProjectSiteOpen(type, x, y, options = {}) {
@@ -8991,11 +9011,12 @@
         findPlantingSpot() {
             const fertileCell = this.cells
                 .filter((cell) =>
-                    cell.biome === 'fertile' &&
-                    distance(
-                        { x: cell.x + CELL_WIDTH * 0.5, y: cell.y + CELL_HEIGHT * 0.5 },
-                        this.camp
-                    ) <= this.getWorkingSiteRadius('farmPlot')
+                    cell.biome === 'fertile' && (() => {
+                        const cellCenter = { x: cell.x + CELL_WIDTH * 0.5, y: cell.y + CELL_HEIGHT * 0.5 };
+                        const cellDistance = distance(cellCenter, this.camp);
+                        return cellDistance >= this.getWorkingSiteMinDistance('farmPlot') &&
+                            cellDistance <= this.getWorkingSiteRadius('farmPlot');
+                    })()
                 )
                 .sort((a, b) =>
                     distance({ x: a.x + CELL_WIDTH * 0.5, y: a.y + CELL_HEIGHT * 0.5 }, this.camp) -
@@ -9003,7 +9024,7 @@
                 )[0];
             if (!fertileCell) {
                 return {
-                    x: clamp(this.camp.x + 55, 30, this.width - 30),
+                    x: clamp(this.camp.x + Math.max(55, this.getWorkingSiteMinDistance('farmPlot') + 10), 30, this.width - 30),
                     y: clamp(this.camp.y - 35, 30, this.height - 30)
                 };
             }
@@ -11183,6 +11204,27 @@
             this.pushEvent('A divine plague spread through the settlement.');
         }
 
+        spreadSicknessAtSelection() {
+            const target = this.selectedEntity && this.selectedEntity !== this.camp ? this.selectedEntity : this.camp;
+            const radius = target === this.camp ? 120 : 96;
+            const affected = this.colonists.filter((colonist) =>
+                colonist.alive && distance(colonist, target) <= radius
+            );
+            if (affected.length === 0) {
+                this.pushEvent('No one was close enough to sicken.');
+                return false;
+            }
+            this.phase9.pressure.disease = clamp(this.phase9.pressure.disease + 0.1, 0, 1);
+            this.phase9.cooldowns.disease = Math.max(this.phase9.cooldowns.disease || 0, 10);
+            for (const colonist of affected) {
+                colonist.stats.health = clamp(colonist.stats.health - 8, 0, 100);
+                colonist.stats.morale = clamp(colonist.stats.morale - 6, 0, 100);
+                colonist.decisionCooldown = 0;
+            }
+            this.pushEvent(`A divine sickness spread through ${affected.length} nearby colonist${affected.length === 1 ? '' : 's'}.`);
+            return true;
+        }
+
         inspireLearning() {
             for (const colonist of this.colonists) {
                 if (!colonist.alive) continue;
@@ -11401,10 +11443,10 @@
                 supportMode: 'main aid',
                 status: 'supply caravan',
                 effectLabel: 'Aid',
-                strength: 1.6,
+                strength: 1.15,
                 supplies: { food, water, wood }
             });
-            target.supportCooldown = this.getColonySupportCooldownDuration(target, 20, 62);
+            target.supportCooldown = this.getColonySupportCooldownDuration(target, 28, 118);
             target.recentAction = 'receiving aid';
             this.pushEvent(`The main colony sent aid toward ${target.name}.`);
             return true;
@@ -11437,41 +11479,30 @@
         }
 
         instillFearKnowledgeOnSelectedColonist() {
-            const colonist = this.selectedEntity;
-            if (!colonist || colonist.type || colonist === this.camp || !colonist.alive) {
-                this.pushEvent('Select a living colonist to instill fear knowledge.');
+            const target = this.selectedEntity && this.selectedEntity !== this.camp ? this.selectedEntity : this.camp;
+            const threatLike = target?.type === 'predator' || target?.type === 'wildAnimal' || target?.entityType === 'colony';
+            const center = threatLike ? target : this.camp;
+            const nearby = this.colonists.filter((colonist) => colonist.alive && distance(colonist, center) < 170);
+            if (nearby.length === 0) {
+                this.pushEvent('No colonists were close enough to feel the fear.');
                 return false;
             }
-
-            colonist.lastDamageCause = 'predatorAttack';
-            colonist.stats.health = 0;
-            colonist.alive = false;
-            colonist.intent = 'flee';
-            colonist.state = 'fallen';
-            colonist.fearKnowledgeInjected = true;
-
-            this.rememberDanger(colonist, colonist, 'predatorAttack');
-            for (const witness of this.colonists) {
-                if (witness === colonist || !witness.alive) {
-                    continue;
-                }
-                if (distance(witness, colonist) < 180) {
-                    this.rememberDanger(colonist, witness, 'predatorAttack');
-                    witness.stats.morale = clamp(witness.stats.morale - 12, 0, 100);
-                    witness.stats.energy = clamp(witness.stats.energy - 4, 0, 100);
-                    witness.decisionCooldown = 0;
-                }
-            }
-
-            this.lineageMemory.deathCauses.predatorAttack += 1;
             const lesson = 'Predators force distance, fear, and retreat.';
             if (!this.lineageMemory.lessons.includes(lesson)) {
                 this.lineageMemory.lessons.unshift(lesson);
                 this.lineageMemory.lessons = this.lineageMemory.lessons.slice(0, 6);
             }
-            this.pushThought(`${colonist.name}'s death taught the colony to fear predators.`);
-            this.pushEvent(`${colonist.name} was sacrificed to instill fear knowledge.`);
-            this.selectedEntity = null;
+            for (const colonist of nearby) {
+                this.rememberDanger(center, colonist, 'predatorAttack');
+                colonist.stats.morale = clamp(colonist.stats.morale - 10, 0, 100);
+                colonist.stats.energy = clamp(colonist.stats.energy - 4, 0, 100);
+                colonist.intent = 'flee';
+                colonist.decisionCooldown = 0;
+                colonist.fearKnowledgeInjected = true;
+            }
+            this.lineageMemory.deathCauses.predatorAttack = Math.max(this.lineageMemory.deathCauses.predatorAttack || 0, 1);
+            this.pushThought('A divine terror taught the colony to fear predators and danger.');
+            this.pushEvent(`A wave of fear spread through ${nearby.length} colonist${nearby.length === 1 ? '' : 's'}.`);
             return true;
         }
 

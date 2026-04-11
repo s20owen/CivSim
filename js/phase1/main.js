@@ -155,34 +155,21 @@
             const weather = this.world.getWeatherState();
             const weatherType = weather.targetType || this.world.getWeather().name || weather.type || 'Clear';
             const shelterMix = this.computeShelterMix();
-            const rainAmount = weatherType === 'Cold Snap' ? 0 : (weather.precipitationIntensity || 0);
-            const snowAmount = weatherType === 'Cold Snap'
-                ? Math.max(weather.precipitationIntensity || 0, weather.snowCover * 0.7)
-                : 0;
-            const windAmount = Math.min(1, Math.hypot(weather.windX, weather.windY) * 1.18 + weather.darkness * 0.42 + (weather.gustStrength || 0) * 0.2);
+            const rainAmount = weatherType === 'Rain' ? (weather.precipitationIntensity || weather.intensity || 0) : 0;
+            const windAmount = Math.min(1, Math.hypot(weather.windX, weather.windY) * 1.12 + weather.darkness * 0.36 + (weather.gustStrength || 0) * 0.22);
             const stormAmount = weatherType === 'Storm'
-                ? Math.max(weather.intensity, rainAmount, weather.darkness * 2.4)
+                ? Math.max(weather.intensity, weather.darkness * 2.2, windAmount)
                 : 0;
 
-            const backgroundTarget = weatherType === 'Storm'
-                ? 0.02
-                : weatherType === 'Rain'
-                ? 0.05
-                : weatherType === 'Cold Snap'
-                ? 0.035
-                : 0.075;
-            const windTargetBase = weatherType === 'Cold Snap' ? 0.05 : 0.02;
-            let windTarget = windTargetBase + windAmount * 0.14;
-            let rainTarget = rainAmount * (0.05 + (1 - shelterMix) * 0.18);
-            const roofRainTarget = rainAmount * shelterMix * 0.05;
-            let stormTarget = stormAmount > 0
-                ? 0.05 + stormAmount * (0.18 - shelterMix * 0.04)
+            const backgroundTarget = 0.07;
+            const windTarget = weatherType === 'Cloudy' || weatherType === 'Storm'
+                ? (weatherType === 'Storm' ? 0.1 : 0.05) + windAmount * (weatherType === 'Storm' ? 0.14 : 0.08) * (1 - shelterMix * 0.28)
                 : 0;
-
-            if (weatherType === 'Storm') {
-                windTarget *= 0.58;
-                rainTarget *= 0.48;
-            }
+            const rainTarget = weatherType === 'Rain'
+                ? rainAmount * (0.08 + (1 - shelterMix) * 0.18)
+                : 0;
+            const roofRainTarget = weatherType === 'Rain' ? rainAmount * shelterMix * 0.04 : 0;
+            const stormTarget = 0;
 
             this.setPlayerTarget('background', backgroundTarget);
             this.setPlayerTarget('wind', windTarget);
@@ -191,9 +178,13 @@
 
             const timeNow = performance.now() / 1000;
             const timeSinceThunder = timeNow - this.lastThunderAt;
-            if (weather.lightningFlash > this.lastLightningFlash + 0.16 && timeSinceThunder > 1.8) {
-                this.triggerThunder(Math.max(weather.lightningFlash, weather.intensity));
-                this.lastThunderAt = timeNow;
+            const lightningDelta = weather.lightningFlash - this.lastLightningFlash;
+            if (lightningDelta > 0.28 && weather.lightningFlash > 0.52 && timeSinceThunder > 3.6) {
+                const thunderChance = Math.max(0.08, Math.min(0.42, 0.06 + weather.lightningFlash * 0.18 + stormAmount * 0.1));
+                if (Math.random() < thunderChance) {
+                    this.triggerThunder(Math.max(weather.lightningFlash, weather.intensity));
+                    this.lastThunderAt = timeNow;
+                }
                 this.scheduleNextStormThunder(stormAmount);
             } else if (stormAmount > 0.34 && timeSinceThunder > this.nextStormThunderGap) {
                 this.triggerThunder(0.24 + stormAmount * 0.44);
@@ -211,10 +202,10 @@
 
             this.debugState.contextState = 'html-audio-running';
             this.debugState.shelterMix = Number(shelterMix.toFixed(2));
-            this.debugState.wind = Number((wind + (weatherType === 'Cold Snap' ? snowAmount * 0.02 : 0)).toFixed(3));
+            this.debugState.wind = Number(wind.toFixed(3));
             this.debugState.rain = Number(rain.toFixed(3));
             this.debugState.roofRain = Number(roofRainTarget.toFixed(3));
-            this.debugState.snow = Number((weatherType === 'Cold Snap' ? wind * 0.55 : 0).toFixed(3));
+            this.debugState.snow = 0;
             this.debugState.insects = 0;
             this.debugState.music = Number(background.toFixed(3));
             this.debugState.musicMode =

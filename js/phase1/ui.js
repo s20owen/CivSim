@@ -153,7 +153,7 @@
                 'btn-toggle-storm': 'Spawn Storm',
                 'btn-weather-sun': 'Clear Skies',
                 'btn-weather-rain': 'Rain',
-                'btn-weather-fog': 'Drought',
+                'btn-weather-fog': 'Fog',
                 'btn-weather-cloudy': 'Cloudy',
                 'btn-zoom-out': '-',
                 'btn-zoom-in': '+'
@@ -173,7 +173,7 @@
                 'btn-lightning-strike': () => this.world.lightningStrikeSelected(),
                 'btn-kill-creature': () => this.world.instillFearKnowledgeOnSelectedColonist(),
                 'btn-kill-unit': () => this.world.killSelectedUnit(),
-                'btn-infect-creature': () => this.world.triggerDiseaseOutbreak(),
+                'btn-infect-creature': () => this.world.spreadSicknessAtSelection(),
                 'btn-heal-creature': () => this.world.healSelectedUnit(),
                 'btn-cure-disease': () => this.world.cureDisease(),
                 'btn-disease-outbreak': () => this.world.triggerDiseaseOutbreak(),
@@ -235,7 +235,7 @@
                 'btn-toggle-storm': () => this.world.applyWeather('Storm'),
                 'btn-weather-sun': () => this.world.applyWeather('Clear'),
                 'btn-weather-rain': () => this.world.applyWeather('Rain'),
-                'btn-weather-fog': () => this.world.applyWeather('Drought'),
+                'btn-weather-fog': () => this.world.applyWeather('Fog'),
                 'btn-weather-cloudy': () => this.world.applyWeather('Cloudy'),
                 'btn-zoom-out': () => {
                     const cx = this.renderer.viewportWidth * 0.5;

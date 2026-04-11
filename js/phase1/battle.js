@@ -43,13 +43,16 @@
             const scale = clamp(options.scale || 0.35, 0.2, 1);
             const approach = this.buildApproachGeometry(target, options);
             const tactics = this.pickBattleTactics(colony, options);
+            const battlePoint = options.mode === 'inbound'
+                ? approach.defenderAnchor
+                : { x: target.x, y: target.y };
             const front = {
                 id: `${colony.id}:battle:${this.world.elapsed.toFixed(2)}:${this.world.rng().toFixed(3)}`,
                 colonyId: colony.id,
                 colonyName: colony.name,
                 mode: options.mode || 'inbound',
-                x: target.x,
-                y: target.y,
+                x: battlePoint.x,
+                y: battlePoint.y,
                 scale,
                 formation: approach,
                 tactics,
@@ -84,6 +87,7 @@
                 createdDay: this.world.day,
                 createdYear: this.world.year,
                 status: options.status || 'warband',
+                raidContext: options.raidContext ? { ...options.raidContext } : null,
                 lastResolvedAt: 0,
                 detailKeyMoments: [],
                 supportAlliance: options.supportAlliance || null,
@@ -164,22 +168,20 @@
 
         buildApproachGeometry(target, options = {}) {
             const camp = this.world.camp;
-            const source = options.mode === 'outbound' && options.colonySource
-                ? options.colonySource
-                : camp;
-            const fromCamp = normalizeVector(target.x - source.x, target.y - source.y);
+            const source = options.colonySource || (options.mode === 'outbound' ? camp : camp);
+            const towardTarget = normalizeVector(target.x - source.x, target.y - source.y);
             const tacticBias = options.scale || 0.35;
             const depth = 70 + tacticBias * 58;
             const width = 32 + tacticBias * 32;
-            const stageX = target.x + fromCamp.x * depth;
-            const stageY = target.y + fromCamp.y * depth;
-            const lineX = target.x + fromCamp.x * (18 + tacticBias * 8);
-            const lineY = target.y + fromCamp.y * (18 + tacticBias * 8);
+            const stageX = target.x - towardTarget.x * depth;
+            const stageY = target.y - towardTarget.y * depth;
+            const lineX = target.x - towardTarget.x * (26 + tacticBias * 18);
+            const lineY = target.y - towardTarget.y * (26 + tacticBias * 18);
             return {
                 attackerOrigin: { x: stageX, y: stageY },
                 defenderAnchor: { x: lineX, y: lineY },
-                advanceVector: { x: -fromCamp.x, y: -fromCamp.y },
-                flankVector: { x: -fromCamp.y, y: fromCamp.x },
+                advanceVector: { x: towardTarget.x, y: towardTarget.y },
+                flankVector: { x: -towardTarget.y, y: towardTarget.x },
                 width,
                 depth
             };
@@ -679,9 +681,9 @@
                 return;
             }
 
-            if (!target && front.targetBuildingId && distance(attacker, front) < 18 && this.world.rng() < dt * 1.8) {
+            if (!target && front.targetBuildingId && this.world.rng() < dt * 1.8) {
                 const building = this.world.buildings.find((entry) => entry.id === front.targetBuildingId) || null;
-                if (building) {
+                if (building && distance(attacker, building) < 18) {
                     building.integrity = clamp(building.integrity - (0.1 + front.scale * 0.14), 0, building.maxIntegrity);
                     this.world.battleBursts.push({
                         x: building.x + (this.world.rng() - 0.5) * 12,
@@ -863,9 +865,11 @@
 
             const colony = this.world.getActiveBranchColonies().find((entry) => entry.id === front.colonyId) || null;
             const defenderColony = this.world.getActiveBranchColonies().find((entry) => entry.id === front.defenderColonyId) || null;
+            let raidSummary = null;
             this.applyArmyOutcome(front, colony, outcome, defenderColony);
 
             if (outcome === 'defenders') {
+                raidSummary = this.resolveInboundRaidOutcome(front, colony, false);
                 this.world.battleScars.push({
                     x: front.x,
                     y: front.y,
@@ -874,7 +878,7 @@
                     maxTtl: 90
                 });
                 this.world.createBattleDangerZone(front, 'defenders held');
-                this.recordBattleReport(this.createFrontReport(front, defenders, 'defenders held'));
+                this.recordBattleReport(this.createFrontReport(front, defenders, 'defenders held', [], raidSummary));
                 if (front.mode === 'intercolonial') {
                     if (colony) {
                         this.world.applyFactionWarAftermath(colony, 'defeat', front.scale, {
@@ -915,6 +919,7 @@
                     || this.world.buildings.find((building) => building.type === front.targetBuildingType)
                     || null;
             const damagedBuildings = this.applyBreakthroughDamage(front, target, front.mode === 'intercolonial' ? defenderColony : colony);
+            raidSummary = this.resolveInboundRaidOutcome(front, colony, true, damagedBuildings);
             this.world.battleScars.push({
                 x: front.x,
                 y: front.y,
@@ -923,7 +928,7 @@
                 maxTtl: 120
             });
             this.world.createBattleDangerZone(front, 'attackers broke through');
-            this.recordBattleReport(this.createFrontReport(front, defenders, 'attackers broke through', damagedBuildings));
+            this.recordBattleReport(this.createFrontReport(front, defenders, 'attackers broke through', damagedBuildings, raidSummary));
             if (front.mode === 'intercolonial') {
                 if (colony) {
                     this.world.applyFactionWarAftermath(colony, 'victory', front.scale, {
@@ -953,6 +958,71 @@
                 this.clearBattleOrders(front);
                 this.world.recordFactionEvent(`${front.colonyName} overran the defenders at the frontier battle.`);
             }
+        }
+
+        resolveInboundRaidOutcome(front, colony, attackersWon, damagedBuildings = []) {
+            if (front.mode !== 'inbound' || !front.raidContext || !colony) {
+                return null;
+            }
+            const raid = front.raidContext;
+            if (!attackersWon) {
+                colony.factionIdentity.fear = clamp(colony.factionIdentity.fear + 0.06, 0.05, 0.95);
+                colony.factionIdentity.trust = clamp(colony.factionIdentity.trust - 0.04, 0.05, 0.95);
+                colony.recentAction = 'repelled';
+                if (raid.campaignPressure > 0.25) {
+                    colony.campaign.pressure = clamp(raid.campaignPressure - 0.08, 0, 1);
+                }
+                this.world.recordFactionEvent(`The main settlement repelled raiders from ${colony.name}.`);
+                return {
+                    foodLoss: 0,
+                    woodLoss: 0,
+                    prisoners: colony.history.prisoners || 0,
+                    refugees: colony.history.refugees || 0,
+                    warfareMethod: raid.warfareMethod
+                };
+            }
+
+            const foodLoss = Math.min(9, Math.max(2, colony.population + front.scale * 3));
+            const woodLoss = Math.min(5, Math.max(1, colony.population * 0.5 + front.scale * 2));
+            this.world.camp.food = Math.max(0, this.world.camp.food - foodLoss);
+            this.world.camp.wood = Math.max(0, this.world.camp.wood - woodLoss);
+            colony.food = clamp((colony.food || 0) + foodLoss * 0.7, 0, 140);
+            colony.wood = clamp((colony.wood || 0) + woodLoss * 0.7, 0, 80);
+            colony.history.raids += 1;
+            colony.recentAction = 'raiding';
+            if (raid.campaignPressure > 0.48) {
+                colony.campaign.pressure = clamp(raid.campaignPressure + 0.06, 0, 1);
+            }
+            if (front.scale > 0.52) {
+                colony.history.campaigns += 1;
+                if (this.world.colonists.length > 5 && this.world.rng() < 0.35) {
+                    colony.history.refugees += 1;
+                    this.world.recordFactionEvent(`Families fled inward after the larger battle with ${colony.name}.`);
+                }
+            }
+            if (this.world.rng() < 0.26 && this.world.colonists.length > 4) {
+                colony.history.prisoners += 1;
+                this.world.recordFactionEvent(`${colony.name} carried off a prisoner after the raid on the ${front.targetBuildingType}.`);
+            }
+            this.world.lastRaid = {
+                by: colony.name,
+                target: front.targetBuildingType,
+                day: this.world.day,
+                year: this.world.year
+            };
+            this.world.recordFactionEvent(
+                raid.strategy === 'raid'
+                    ? `${colony.name} launched ${raid.warfareMethod} against the ${front.targetBuildingType} and stole supplies.`
+                    : `${colony.name} struck the ${front.targetBuildingType} with ${raid.warfareMethod} and stole supplies.`
+            );
+            return {
+                foodLoss,
+                woodLoss,
+                prisoners: colony.history.prisoners || 0,
+                refugees: colony.history.refugees || 0,
+                warfareMethod: raid.warfareMethod,
+                damagedBuildings
+            };
         }
 
         clearBattleOrders(front) {
@@ -1075,7 +1145,7 @@
             return damaged;
         }
 
-        createFrontReport(front, defenders, outcome, damagedBuildings = []) {
+        createFrontReport(front, defenders, outcome, damagedBuildings = [], raidSummary = null) {
             const defenderCount = Math.max(front.initialDefenderCount || 0, defenders.length);
             const escapedAttackers = front.attackers.filter((attacker) => attacker.alive && attacker.hp > 0).length;
             const outboundAttackers = front.mode === 'outbound' ? this.getAssignedColonists(front).filter((entry) => entry.alive).length : escapedAttackers;
@@ -1104,6 +1174,17 @@
             }
             if (damagedBuildings.length > 1) {
                 detailLines.push(`Buildings hit: ${damagedBuildings.map((entry) => titleCase(entry)).join(', ')}`);
+            }
+            if (raidSummary) {
+                if (raidSummary.foodLoss > 0 || raidSummary.woodLoss > 0) {
+                    detailLines.push(`Stores lost: food ${Number((raidSummary.foodLoss || 0).toFixed(1))}, wood ${Number((raidSummary.woodLoss || 0).toFixed(1))}`);
+                }
+                if ((raidSummary.prisoners || 0) > 0) {
+                    detailLines.push(`Prisoners taken: ${raidSummary.prisoners}`);
+                }
+                if ((raidSummary.refugees || 0) > 0) {
+                    detailLines.push(`Refugees displaced: ${raidSummary.refugees}`);
+                }
             }
 
             if (front.detailKeyMoments.length) {
@@ -1139,6 +1220,10 @@
                 },
                 surprise: front.surpriseTriggered,
                 damagedBuildings,
+                resourceLosses: raidSummary ? {
+                    food: Number(((raidSummary.foodLoss) || 0).toFixed(1)),
+                    wood: Number(((raidSummary.woodLoss) || 0).toFixed(1))
+                } : null,
                 detailLines,
                 meta,
                 popup: reportType === 'skirmish' || reportType === 'battle' || reportType === 'large battle'
