@@ -21,6 +21,8 @@
     const COLONIST_AWARENESS_SCAN_MAX = 1.1;
     const COLONIST_THREAT_SCAN_MIN = 0.18;
     const COLONIST_THREAT_SCAN_MAX = 0.34;
+    const COLONIST_LOCAL_WEATHER_SCAN_MIN = 0.5;
+    const COLONIST_LOCAL_WEATHER_SCAN_MAX = 1.1;
     const ANIMAL_THREAT_SCAN_MIN = 0.28;
     const ANIMAL_THREAT_SCAN_MAX = 0.48;
     const PREDATOR_SCAN_MIN = 0.22;
@@ -1271,9 +1273,13 @@
             this.pathRecalcCooldown = 0;
             this.awarenessScanCooldown = 0;
             this.threatScanCooldown = 0;
+            this.localWeatherCooldown = 0;
+            this.equipmentRefreshCooldown = 0;
+            this.deferredUpdateDt = 0;
             this.lastNeed = 'steady';
             this.threat = null;
             this.threatDistance = Infinity;
+            this.cachedLocalWeather = null;
             this.lastDamageCause = null;
             this.woundSeverity = 0;
             this.woundCount = 0;
@@ -1338,16 +1344,19 @@
             this.lastDecisionScores = [];
         }
 
-        update(dt, world) {
+        update(dt, world, options = {}) {
             if (!this.alive) {
                 return;
             }
             this.worldRef = world;
+            const lowPriorityLod = Boolean(options.lowPriorityLod);
 
             this.decisionCooldown = Math.max(0, this.decisionCooldown - dt);
             this.thoughtCooldown = Math.max(0, this.thoughtCooldown - dt);
             this.pathRecalcCooldown = Math.max(0, this.pathRecalcCooldown - dt);
             this.knowledgeShareCooldown = Math.max(0, this.knowledgeShareCooldown - dt);
+            this.localWeatherCooldown = Math.max(0, this.localWeatherCooldown - dt);
+            this.equipmentRefreshCooldown = Math.max(0, this.equipmentRefreshCooldown - dt);
             this.lastBattleHitTtl = Math.max(0, this.lastBattleHitTtl - dt);
             this.battleOrderTtl = Math.max(0, this.battleOrderTtl - dt);
             this.emotionalMemory.battleTrauma = clamp(this.emotionalMemory.battleTrauma - dt * (this.state === 'sleeping' ? 0.018 : 0.006), 0, 1);
@@ -1357,9 +1366,17 @@
             this.mood.grief = clamp(this.emotionalMemory.griefLoad * 100, 0, 100);
             this.ageYears += dt / YEAR_DURATION;
             this.lifeStage = this.ageYears < 16 ? 'youth' : 'adult';
-            const localWeather = world.getWeatherStateAt(this.x, this.y, {
-                sheltered: distance(this, world.camp) < 44 && world.camp.shelter > 28
-            });
+            const shelteredNearCamp = distance(this, world.camp) < 44 && world.camp.shelter > 28;
+            let localWeather = this.cachedLocalWeather;
+            if (!localWeather || this.localWeatherCooldown <= 0 || !lowPriorityLod) {
+                localWeather = world.getWeatherStateAt(this.x, this.y, {
+                    sheltered: shelteredNearCamp
+                });
+                this.cachedLocalWeather = localWeather;
+                const weatherScanMin = lowPriorityLod ? COLONIST_LOCAL_WEATHER_SCAN_MIN * 1.8 : COLONIST_LOCAL_WEATHER_SCAN_MIN;
+                const weatherScanMax = lowPriorityLod ? COLONIST_LOCAL_WEATHER_SCAN_MAX * 1.8 : COLONIST_LOCAL_WEATHER_SCAN_MAX;
+                this.localWeatherCooldown = weatherScanMin + world.rng() * (weatherScanMax - weatherScanMin);
+            }
             this.threatScanCooldown = Math.max(0, this.threatScanCooldown - dt);
             if (this.threatScanCooldown <= 0 || !this.threat || !world.predators.includes(this.threat)) {
                 const threatVisionRadius = world.getWeatherVisibilityRadius(this, 140, {
@@ -1367,7 +1384,9 @@
                 });
                 this.threat = world.findNearestPredator(this, threatVisionRadius);
                 this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
-                this.threatScanCooldown = COLONIST_THREAT_SCAN_MIN + world.rng() * (COLONIST_THREAT_SCAN_MAX - COLONIST_THREAT_SCAN_MIN);
+                const threatScanMin = lowPriorityLod ? COLONIST_THREAT_SCAN_MIN * 1.8 : COLONIST_THREAT_SCAN_MIN;
+                const threatScanMax = lowPriorityLod ? COLONIST_THREAT_SCAN_MAX * 1.8 : COLONIST_THREAT_SCAN_MAX;
+                this.threatScanCooldown = threatScanMin + world.rng() * (threatScanMax - threatScanMin);
             } else {
                 this.threatDistance = this.threat ? distance(this, this.threat) : Infinity;
             }
@@ -1432,12 +1451,25 @@
                 this.battleFormationIndex = -1;
             }
 
-            world.refreshEquipment(this);
+            if (!lowPriorityLod || this.equipmentRefreshCooldown <= 0) {
+                world.refreshEquipment(this);
+                this.equipmentRefreshCooldown = lowPriorityLod ? 1.25 + world.rng() * 0.75 : 0.4 + world.rng() * 0.2;
+            }
 
+            const skipDecision = Boolean(options.skipDecision);
             const isMidAction = this.state === 'moving' || this.state === 'working' || this.state === 'sleeping';
-            const shouldRefreshIntent = !this.plan.length || (this.decisionCooldown <= 0 && this.planStep === 0 && !isMidAction);
-            if (shouldRefreshIntent || this.shouldReplan(world)) {
-                this.buildPlan(world);
+            const shouldRefreshIntent = !this.plan.length || (!skipDecision && this.decisionCooldown <= 0 && this.planStep === 0 && !isMidAction);
+            const needsReplan = lowPriorityLod && skipDecision
+                ? this.shouldReplanLight(world)
+                : this.shouldReplan(world);
+            const shouldReplanNow = shouldRefreshIntent || (!lowPriorityLod && needsReplan) || (!skipDecision && needsReplan);
+            if (shouldReplanNow) {
+                const keptLowPriorityPlan = lowPriorityLod && this.tryContinueLowPriorityIntent(world);
+                if (!keptLowPriorityPlan) {
+                    this.buildPlan(world, {
+                        lowPriorityLod
+                    });
+                }
             }
 
             this.executePlan(dt, world);
@@ -1485,9 +1517,124 @@
             return false;
         }
 
-        buildPlan(world) {
+        shouldReplanLight(world) {
+            if (!this.plan.length) {
+                return true;
+            }
+            const currentStep = this.plan[this.planStep];
+            if (!currentStep) {
+                return true;
+            }
+            if (currentStep.kind === 'resource' && currentStep.entity?.depleted) {
+                return true;
+            }
+            if ((currentStep.action === 'huntAnimal' || currentStep.action === 'huntMeal') &&
+                (!currentStep.entity || currentStep.entity.depleted || distance(this, currentStep.entity) > HUNT_ABORT_DISTANCE)) {
+                return true;
+            }
+            if (currentStep.action === 'battleEngage' && currentStep.entity?.resolved) {
+                return true;
+            }
+            return false;
+        }
+
+        tryContinueLowPriorityIntent(world) {
+            if (!this.intent || this.threat || this.assignedBattlefrontId !== null) {
+                return false;
+            }
+            let plan = null;
+            switch (this.intent) {
+                case 'drink':
+                    plan = world.buildDrinkPlan(this);
+                    break;
+                case 'haulWater':
+                    plan = world.buildWaterHaulPlan(this);
+                    break;
+                case 'eat':
+                    plan = world.buildEatPlan(this);
+                    break;
+                case 'warm':
+                    plan = world.buildWarmPlan(this);
+                    break;
+                case 'sleep':
+                    plan = world.buildSleepPlan(this);
+                    break;
+                case 'tend':
+                    plan = world.buildTendPlan(this);
+                    break;
+                case 'forage':
+                    plan = world.buildForagePlan(this);
+                    break;
+                case 'gatherWood':
+                    plan = world.buildWoodPlan(this);
+                    break;
+                case 'gatherStone':
+                    plan = world.buildStonePlan(this);
+                    break;
+                case 'hunt':
+                    plan = world.buildHuntPlan(this);
+                    break;
+                case 'craft':
+                    plan = world.buildCraftPlan(this);
+                    break;
+                case 'process':
+                    plan = world.buildProcessPlan(this);
+                    break;
+                case 'repair':
+                    plan = world.buildRepairPlan(this);
+                    break;
+                case 'plant':
+                    plan = world.buildPlantTrialPlan(this);
+                    break;
+                case 'socialize':
+                    plan = world.buildSocialPlan(this);
+                    break;
+                case 'build':
+                    plan = world.buildConstructionPlan(this);
+                    break;
+                case 'rest':
+                    plan = world.buildRestPlan(this);
+                    break;
+                default:
+                    return false;
+            }
+            if (!plan || !plan.length) {
+                return false;
+            }
+            this.applySelectedPlan(world, {
+                key: this.intent,
+                need: this.lastNeed || 'steady'
+            }, plan, {
+                lowPriorityLod: true,
+                preserveIntent: true
+            });
+            return true;
+        }
+
+        applySelectedPlan(world, option, plan, config = {}) {
+            if (!config.preserveIntent) {
+                this.intent = option.key;
+                this.lastNeed = option.need;
+            }
+            this.decisionCooldown = config.lowPriorityLod
+                ? 2.6 + world.rng() * 1.8
+                : 1 + world.rng() * 0.8;
+            this.plan = plan;
+            this.planStep = 0;
+            this.path = [];
+            this.pathIndex = 0;
+            this.actionProgress = 0;
+
+            if (!config.lowPriorityLod && this.thoughtCooldown <= 0) {
+                world.pushThought(`${this.name} ${this.intentLabel()}.`);
+                this.thoughtCooldown = 5 + world.rng() * 2;
+            }
+        }
+
+        buildPlan(world, buildOptions = {}) {
+            const lowPriorityLod = Boolean(buildOptions.lowPriorityLod);
             const stats = this.stats;
-            const options = [
+            const decisionOptions = [
                 {
                     key: 'protect',
                     need: 'danger',
@@ -1629,7 +1776,8 @@
                     key: 'gatherWood',
                     need: 'fuel',
                     score: clamp(12 - world.camp.fireFuel, 0, 12) * 2.9 +
-                        clamp(10 - world.camp.wood, 0, 10) * 1.4 +
+                        world.getWoodShortfall() * 2.2 -
+                        world.getWoodSurplusPenalty() * 3.8 +
                         world.getConstructionDemand('wood') * 3 +
                         world.getLessonBonus('exposure', 'gatherWood') -
                         world.getActionConfidence(this, 'gatherWood') * 10 +
@@ -1774,14 +1922,16 @@
                 }
             ].sort((a, b) => b.score - a.score);
 
-            this.lastDecisionScores = options.slice(0, 5).map((option) => ({
-                key: option.key,
-                need: option.need,
-                score: Number(option.score.toFixed(1))
-            }));
+            if (!lowPriorityLod) {
+                this.lastDecisionScores = decisionOptions.slice(0, 5).map((option) => ({
+                    key: option.key,
+                    need: option.need,
+                    score: Number(option.score.toFixed(1))
+                }));
+            }
 
             const viable = [];
-            for (const option of options) {
+            for (const option of decisionOptions) {
                 const plan = option.builder();
                 if (plan && plan.length) {
                     viable.push({ option, plan });
@@ -1802,22 +1952,12 @@
             }
 
             if (!selected) {
-                selected = { option: options[options.length - 1], plan: world.buildRestPlan(this) };
+                selected = { option: decisionOptions[decisionOptions.length - 1], plan: world.buildRestPlan(this) };
             }
 
-            this.intent = selected.option.key;
-            this.lastNeed = selected.option.need;
-            this.decisionCooldown = 1 + world.rng() * 0.8;
-            this.plan = selected.plan;
-            this.planStep = 0;
-            this.path = [];
-            this.pathIndex = 0;
-            this.actionProgress = 0;
-
-            if (this.thoughtCooldown <= 0) {
-                world.pushThought(`${this.name} ${this.intentLabel()}.`);
-                this.thoughtCooldown = 5 + world.rng() * 2;
-            }
+            this.applySelectedPlan(world, selected.option, selected.plan, {
+                lowPriorityLod
+            });
         }
 
         intentLabel() {
@@ -1996,6 +2136,7 @@
             this.lastSeasonName = SEASONS[this.seasonIndex].name;
             this.structureRaidCooldown = 0;
             this.mainAttackCooldown = 30;
+            this.mainOffenseEvalCooldown = 0;
             this.weatherDamageCooldown = 0;
             this.lightningStrikeCooldown = 0;
             this.lastResolvedLightningFlash = 0;
@@ -2010,11 +2151,56 @@
             this.battleScars = [];
             this.battleReports = [];
             this.debugFlags = {
-                showBuildRing: false
+                showBuildRing: false,
+                showPerformance: false
             };
+            this.performanceTelemetry = {
+                updateBreakdown: {},
+                hottestUpdateSection: null,
+                hottestUpdateMs: 0,
+                branchUpdateBreakdown: {},
+                hottestBranchSection: null,
+                hottestBranchMs: 0
+            };
+            this.mainColonyAttackSummaryCache = null;
+            this.campDefenseSummaryCache = null;
+            this.colonyStabilityCache = null;
             this.factionEffectPool = new SimpleObjectPool(() => ({ id: '', type: 'trade', label: '', x: 0, y: 0, ttl: 0, maxTtl: 0, targetKind: 'camp' }));
             this.battleBurstPool = new SimpleObjectPool(() => ({ x: 0, y: 0, ttl: 0, maxTtl: 0, type: 'hit' }));
+            this.factionPartyPool = new SimpleObjectPool(() => ({
+                id: '',
+                colonyId: 0,
+                colonyName: '',
+                type: 'trade',
+                direction: 'toCamp',
+                x: 0,
+                y: 0,
+                startX: 0,
+                startY: 0,
+                targetX: 0,
+                targetY: 0,
+                progress: 0,
+                speed: 0.18,
+                routeQuality: 0,
+                routeRisk: 0,
+                onRoad: false,
+                strength: 1,
+                status: 'traveling',
+                effectLabel: '',
+                targetKind: 'camp',
+                reinforceBattlefrontId: null,
+                reinforcementValue: 0,
+                reinforceSide: 'defenders',
+                targetColonyId: null,
+                supportMode: null,
+                supplies: null,
+                courierName: null
+            }));
+            this.battleScarPool = new SimpleObjectPool(() => ({ x: 0, y: 0, radius: 12, ttl: 0, maxTtl: 0 }));
             this.landUseRebuildCooldown = 0;
+            this.systemCadence = {};
+            this.colonistDecisionBatch = 0;
+            this.colonistUpdateBatch = 0;
             this.reportCounter = 0;
             this.eraHistory = [];
             this.lastKnownEra = 'survival';
@@ -2239,6 +2425,10 @@
         }
 
         getColonyStability() {
+            const cacheTtl = this.getSimulationPerformanceProfile().mobile ? 1.6 : 0.8;
+            if (this.colonyStabilityCache && this.colonyStabilityCache.expiresAt > this.elapsed) {
+                return this.colonyStabilityCache.value;
+            }
             const averages = this.getAverages();
             const foodStability = clamp(this.camp.food / Math.max(8, this.colonists.length * 4), 0, 1);
             const waterStability = clamp(this.camp.water / Math.max(6, this.colonists.length * 3), 0, 1);
@@ -2246,7 +2436,7 @@
             const healthStability = clamp((averages.health || 0) / 100, 0, 1);
             const housingStability = clamp((this.getHousingSatisfaction() - 0.45) / 0.8, 0, 1);
             const stockpilePenalty = clamp(this.getStockpilePressure() / 8, 0, 1);
-            return clamp(
+            const value = clamp(
                 foodStability * 0.22 +
                 waterStability * 0.16 +
                 moraleStability * 0.18 +
@@ -2256,6 +2446,11 @@
                 0,
                 1
             );
+            this.colonyStabilityCache = {
+                expiresAt: this.elapsed + cacheTtl,
+                value
+            };
+            return value;
         }
 
         getCurrentTechBands() {
@@ -2737,6 +2932,11 @@
             this.pushEvent(`Build ring debug ${this.debugFlags.showBuildRing ? 'enabled' : 'disabled'}.`);
         }
 
+        togglePerformanceDebug() {
+            this.debugFlags.showPerformance = !this.debugFlags.showPerformance;
+            this.pushEvent(`Performance debug ${this.debugFlags.showPerformance ? 'enabled' : 'disabled'}.`);
+        }
+
         getProjectPlacementMarginCells(type) {
             const span = this.getPlacementSpan(type);
             return Math.max(VALLEY_RING_CELLS + 1, 1 + Math.ceil(Math.max(span.cols, span.rows) * 0.5));
@@ -2762,6 +2962,8 @@
         }
 
         normalizeBranchColony(colony, index = 0) {
+            const baseColony = { ...(colony || {}) };
+            delete baseColony.cachedNearbyResources;
             const inheritedCulture = clone(colony.inheritedCulture || this.lineageMemory.culturalValues);
             const legacyProfile = this.getCultureLegacyProfile(inheritedCulture, {
                 era: this.getCurrentEra(),
@@ -2794,7 +2996,7 @@
             const defaultDiplomacy = colony.diplomacyState ||
                 (daughterBias && defaultTrade > 0.58 && defaultTrust > 0.48 ? 'trading' : 'cautious');
             return {
-                ...clone(colony),
+                ...baseColony,
                 entityType: 'colony',
                 id: colony.id || index + 1,
                 name: colony.name || `${colony.type === 'splinter' ? 'Splinter' : 'Daughter'} Hold ${index + 1}`,
@@ -2807,6 +3009,8 @@
                 raidCooldown: Number.isFinite(colony.raidCooldown) ? colony.raidCooldown : 34 + this.rng() * 14,
                 diplomacyCooldown: Number.isFinite(colony.diplomacyCooldown) ? colony.diplomacyCooldown : 10 + this.rng() * 12,
                 supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : this.getColonySupportCooldownDuration(colony, colony.type === 'daughter' ? 18 : 12, colony.type === 'daughter' ? 54 : 40),
+                resourceScanCooldown: Number.isFinite(colony.resourceScanCooldown) ? colony.resourceScanCooldown : 0,
+                strategicEvalCooldown: Number.isFinite(colony.strategicEvalCooldown) ? colony.strategicEvalCooldown : 0,
                 foundedDay: colony.foundedDay || this.day,
                 foundedYear: colony.foundedYear || this.year,
                 population: Number.isFinite(colony.population) ? colony.population : 2,
@@ -2885,7 +3089,9 @@
                     target: colony.campaign?.target || 'camp',
                     strategy: colony.campaign?.strategy || 'watchful'
                 },
-                lastSharedKnowledge: colony.lastSharedKnowledge || null
+                lastSharedKnowledge: colony.lastSharedKnowledge || null,
+                cachedNearbyResources: clone(colony.cachedNearbyResources || []),
+                cachedLocalResourceCount: Number.isFinite(colony.cachedLocalResourceCount) ? colony.cachedLocalResourceCount : 0
             };
         }
 
@@ -2939,20 +3145,55 @@
             army.veterans = clamp(army.veterans, 0, capacity);
         }
 
-        getCampDefenseSummary() {
-            const adults = this.colonists.filter((colonist) => colonist.alive && colonist.lifeStage !== 'child');
-            const militia = adults.filter((colonist) => colonist.stats.health > 48).length;
-            const huntersPressed = adults.filter((colonist) =>
-                this.getSoftRole(colonist) === 'hunter' || colonist.equipment.hunting?.type === 'spear'
-            ).length;
-            const trainedDefenders = adults.filter((colonist) =>
-                colonist.skills.combat > 1.6 || colonist.intent === 'protect'
-            ).length + this.countBuildings('watchtower') + this.countBuildings('wall') + this.countBuildings('fortifiedStructure');
-            return {
-                militia,
-                huntersPressed,
-                trainedDefenders
+        ensureBranchArmy(colony) {
+            if (colony.army) {
+                return colony.army;
+            }
+            colony.army = {
+                available: Math.max(1, Math.round((colony.population || 2) * (colony.type === 'splinter' ? 0.72 : 0.48))),
+                wounded: 0,
+                veterans: Math.max(0, Math.round((colony.history?.raids || 0) * 0.4 + (colony.warMemory?.victories || 0) * 0.6)),
+                morale: clamp(0.56 + (colony.factionIdentity?.militaryTendency || 0.5) * 0.18 - (colony.factionIdentity?.fear || 0.25) * 0.08, 0.12, 1),
+                recovery: 0,
+                commander: {
+                    name: colony.commanderName || this.generateUniqueName(),
+                    style: colony.type === 'splinter' ? 'aggressive' : colony.type === 'daughter' ? 'guarded' : 'balanced',
+                    aggression: clamp((colony.factionIdentity?.militaryTendency || 0.5) * 0.9 + (colony.factionIdentity?.envy || 0.2) * 0.2, 0.1, 1),
+                    discipline: clamp(0.38 + (colony.factionIdentity?.trust || 0.4) * 0.18 + (colony.factionIdentity?.militaryTendency || 0.5) * 0.24, 0.1, 1),
+                    caution: clamp((colony.factionIdentity?.fear || 0.25) * 0.65 + (colony.type === 'daughter' ? 0.12 : 0), 0.05, 1)
+                }
             };
+            return colony.army;
+        }
+
+        getCampDefenseSummary() {
+            const cacheTtl = this.getSimulationPerformanceProfile().mobile ? 1.4 : 0.7;
+            if (this.campDefenseSummaryCache && this.campDefenseSummaryCache.expiresAt > this.elapsed) {
+                return this.campDefenseSummaryCache.value;
+            }
+            let militia = 0;
+            let huntersPressed = 0;
+            let trainedDefenders = this.countBuildings('watchtower') + this.countBuildings('wall') + this.countBuildings('fortifiedStructure');
+            for (const colonist of this.colonists) {
+                if (!colonist.alive || colonist.lifeStage === 'child') {
+                    continue;
+                }
+                if (colonist.stats.health > 48) {
+                    militia += 1;
+                }
+                if (colonist.equipment.hunting?.type === 'spear' || (colonist.skills.hunting || 0) >= 2.2) {
+                    huntersPressed += 1;
+                }
+                if ((colonist.skills.combat || 0) > 1.6 || colonist.intent === 'protect') {
+                    trainedDefenders += 1;
+                }
+            }
+            const value = { militia, huntersPressed, trainedDefenders };
+            this.campDefenseSummaryCache = {
+                expiresAt: this.elapsed + cacheTtl,
+                value
+            };
+            return value;
         }
 
         getCampDefensePower() {
@@ -2960,31 +3201,66 @@
             return forces.militia * 1 + forces.huntersPressed * 1.35 + forces.trainedDefenders * 1.8;
         }
 
-        getMainColonyAttackSummary() {
-            const adults = this.colonists.filter((colonist) => colonist.alive && colonist.lifeStage === 'adult');
-            const available = adults.filter((colonist) =>
-                colonist.stats.health > 48 &&
-                colonist.stats.energy > 40 &&
-                colonist.stats.warmth > 24 &&
-                colonist.assignedBattlefrontId === null
-            );
-            const attackers = available
-                .slice()
-                .sort((left, right) => (
-                    (right.skills.combat + (this.getSoftRole(right) === 'hunter' ? 1.5 : 0) + right.combatPower * 0.08) -
-                    (left.skills.combat + (this.getSoftRole(left) === 'hunter' ? 1.5 : 0) + left.combatPower * 0.08)
-                ));
-            return {
-                available,
-                attackers,
-                power: attackers.slice(0, 8).reduce((sum, colonist) => (
-                    sum + colonist.combatPower * 0.9 + colonist.skills.combat * 1.4 + (colonist.equipment.hunting?.type === 'spear' ? 3.2 : 0)
-                ), 0)
-            };
+        getColonistAttackReadinessScore(colonist) {
+            const spearBonus = colonist.equipment.hunting?.type === 'spear' ? 1.5 : 0;
+            const hunterBonus = spearBonus > 0 ? spearBonus : Math.min(1.15, (colonist.skills.hunting || 0) * 0.18);
+            return (colonist.skills.combat || 0) + hunterBonus + (colonist.combatPower || 0) * 0.08;
         }
 
-        getRegionalConflictPressure() {
-            return this.getActiveBranchColonies().reduce((max, colony) =>
+        getMainColonyAttackSummary(options = {}) {
+            const useCache = options.useCache !== false;
+            const cacheTtl = this.getSimulationPerformanceProfile().mobile ? 1.8 : 0.8;
+            if (useCache && this.mainColonyAttackSummaryCache && this.mainColonyAttackSummaryCache.expiresAt > this.elapsed) {
+                return this.mainColonyAttackSummaryCache.value;
+            }
+            const available = [];
+            const attackers = [];
+            let power = 0;
+            for (const colonist of this.colonists) {
+                if (
+                    !colonist.alive ||
+                    colonist.lifeStage !== 'adult' ||
+                    colonist.stats.health <= 48 ||
+                    colonist.stats.energy <= 40 ||
+                    colonist.stats.warmth <= 24 ||
+                    colonist.assignedBattlefrontId !== null
+                ) {
+                    continue;
+                }
+                available.push(colonist);
+                const score = this.getColonistAttackReadinessScore(colonist);
+                let insertIndex = attackers.length;
+                while (insertIndex > 0 && attackers[insertIndex - 1].score < score) {
+                    insertIndex -= 1;
+                }
+                if (insertIndex < 8) {
+                    attackers.splice(insertIndex, 0, { colonist, score });
+                    if (attackers.length > 8) {
+                        attackers.length = 8;
+                    }
+                } else if (attackers.length < 8) {
+                    attackers.push({ colonist, score });
+                }
+            }
+            const attackerColonists = attackers.map((entry) => entry.colonist);
+            for (const colonist of attackerColonists) {
+                power += colonist.combatPower * 0.9 + colonist.skills.combat * 1.4 + (colonist.equipment.hunting?.type === 'spear' ? 3.2 : 0);
+            }
+            const value = {
+                available,
+                attackers: attackerColonists,
+                power
+            };
+            this.mainColonyAttackSummaryCache = {
+                expiresAt: this.elapsed + cacheTtl,
+                value
+            };
+            return value;
+        }
+
+        getRegionalConflictPressure(activeColonies = null) {
+            const colonies = activeColonies || this.getActiveBranchColonies();
+            return colonies.reduce((max, colony) =>
                 Math.max(max, colony.campaign?.state === 'active' ? colony.campaign.pressure || 0 : 0), 0
             );
         }
@@ -3004,11 +3280,12 @@
             );
         }
 
-        getPrimaryThreatSource(targetColony) {
+        getPrimaryThreatSource(targetColony, activeColonies = null) {
             if (!targetColony) {
                 return null;
             }
-            const nearbyThreats = this.getActiveBranchColonies()
+            const colonies = activeColonies || this.getActiveBranchColonies();
+            const nearbyThreats = colonies
                 .filter((colony) =>
                     colony.id !== targetColony.id &&
                     colony.diplomacyState === 'rival' &&
@@ -3029,22 +3306,27 @@
             return nearbyThreats[0]?.score > 0.34 ? nearbyThreats[0].colony : null;
         }
 
-        getBranchColonyByName(name) {
+        getBranchColonyByName(name, activeColonies = null, branchByName = null) {
             if (!name) {
                 return null;
             }
-            return this.getActiveBranchColonies().find((colony) => colony.name === name) || null;
+            if (branchByName?.has(name)) {
+                return branchByName.get(name) || null;
+            }
+            const colonies = activeColonies || this.getActiveBranchColonies();
+            return colonies.find((colony) => colony.name === name) || null;
         }
 
-        getIntercolonyTarget(colony) {
+        getIntercolonyTarget(colony, activeColonies = null, branchByName = null) {
             if (!colony) {
                 return null;
             }
-            const targetByName = this.getBranchColonyByName(colony.campaign?.target);
+            const colonies = activeColonies || this.getActiveBranchColonies();
+            const targetByName = this.getBranchColonyByName(colony.campaign?.target, colonies, branchByName);
             if (targetByName && targetByName.id !== colony.id) {
                 return targetByName;
             }
-            const candidates = this.getActiveBranchColonies()
+            const candidates = colonies
                 .filter((peer) =>
                     peer.id !== colony.id &&
                     peer.occupation?.state !== 'occupiedByMain' &&
@@ -3130,37 +3412,39 @@
                 return null;
             }
             const routeProfile = this.getRouteProfile(start, end);
-            const party = {
-                id: `${colony.id}:${type}:${this.elapsed.toFixed(2)}:${this.rng().toFixed(3)}`,
-                colonyId: colony.id,
-                colonyName: colony.name,
-                type,
-                direction,
-                x: start.x,
-                y: start.y,
-                startX: start.x,
-                startY: start.y,
-                targetX: end.x,
-                targetY: end.y,
-                progress: 0,
-                speed: (options.speed || (type === 'raid' ? 0.32 : type === 'refugee' ? 0.22 : 0.18)) * routeProfile.speedMultiplier,
-                routeQuality: routeProfile.quality,
-                routeRisk: routeProfile.raidRisk,
-                onRoad: routeProfile.onRoad,
-                strength: options.strength || 1,
-                status: options.status || 'traveling',
-                effectLabel: options.effectLabel || options.status || type,
-                targetKind: options.targetKind || (fromCamp ? 'colony' : 'camp'),
-                reinforceBattlefrontId: options.reinforceBattlefrontId || null,
-                reinforcementValue: options.reinforcementValue || 0,
-                reinforceSide: options.reinforceSide || 'defenders',
-                targetColonyId: options.targetColonyId || null,
-                supportMode: options.supportMode || null,
-                supplies: clone(options.supplies || null),
-                courierName: options.courierName || null
-            };
+            const party = this.factionPartyPool.acquire();
+            party.id = `${colony.id}:${type}:${this.elapsed.toFixed(2)}:${this.rng().toFixed(3)}`;
+            party.colonyId = colony.id;
+            party.colonyName = colony.name;
+            party.type = type;
+            party.direction = direction;
+            party.x = start.x;
+            party.y = start.y;
+            party.startX = start.x;
+            party.startY = start.y;
+            party.targetX = end.x;
+            party.targetY = end.y;
+            party.progress = 0;
+            party.speed = (options.speed || (type === 'raid' ? 0.32 : type === 'refugee' ? 0.22 : 0.18)) * routeProfile.speedMultiplier;
+            party.routeQuality = routeProfile.quality;
+            party.routeRisk = routeProfile.raidRisk;
+            party.onRoad = routeProfile.onRoad;
+            party.strength = options.strength || 1;
+            party.status = options.status || 'traveling';
+            party.effectLabel = options.effectLabel || options.status || type;
+            party.targetKind = options.targetKind || (fromCamp ? 'colony' : 'camp');
+            party.reinforceBattlefrontId = options.reinforceBattlefrontId || null;
+            party.reinforcementValue = options.reinforcementValue || 0;
+            party.reinforceSide = options.reinforceSide || 'defenders';
+            party.targetColonyId = options.targetColonyId || null;
+            party.supportMode = options.supportMode || null;
+            party.supplies = clone(options.supplies || null);
+            party.courierName = options.courierName || null;
             this.factionParties.push(party);
-            this.factionParties = this.factionParties.slice(-20);
+            while (this.factionParties.length > 20) {
+                const released = this.factionParties.shift();
+                this.factionPartyPool.release(released);
+            }
             return party;
         }
 
@@ -3215,7 +3499,7 @@
                             this.spawnFactionEffect(party);
                             continue;
                         }
-                        const army = targetColony.army || this.normalizeBranchColony(targetColony, targetColony.id - 1).army;
+                        const army = this.ensureBranchArmy(targetColony);
                         const reinforcement = Math.max(0.4, party.reinforcementValue || party.strength || 1);
                         if (party.type === 'refugee') {
                             if (party.colonyId !== targetColony.id) {
@@ -3246,7 +3530,14 @@
                 }
                 this.spawnFactionEffect(party);
             }
-            this.factionParties = this.factionParties.filter((party) => party.progress < 1);
+            for (let index = this.factionParties.length - 1; index >= 0; index -= 1) {
+                const party = this.factionParties[index];
+                if (party.progress < 1) {
+                    continue;
+                }
+                this.factionParties.splice(index, 1);
+                this.factionPartyPool.release(party);
+            }
         }
 
         spawnBattlefront(colony, options = {}) {
@@ -3329,6 +3620,21 @@
                 this.battleBurstPool.release(released);
             }
             return burst;
+        }
+
+        spawnBattleScar(x, y, radius = 14, ttl = 90) {
+            const scar = this.battleScarPool.acquire();
+            scar.x = x;
+            scar.y = y;
+            scar.radius = radius;
+            scar.ttl = ttl;
+            scar.maxTtl = ttl;
+            this.battleScars.push(scar);
+            while (this.battleScars.length > 24) {
+                const released = this.battleScars.shift();
+                this.battleScarPool.release(released);
+            }
+            return scar;
         }
 
         applyBattleHit(colonist, damage, front, sourceLabel = 'enemy fighters') {
@@ -4253,6 +4559,9 @@
         }
 
         buildWoodPlan(colonist) {
+            if (this.getWoodShortfall() <= 0 && this.getConstructionDemand('wood') <= 0 && this.camp.fireFuel >= 10) {
+                return null;
+            }
             const trees = this.findNearestResource(colonist, 'trees');
             if (!trees) {
                 this.recordFailedAction(colonist, 'collectWood');
@@ -4754,10 +5063,18 @@
             if (this.paused) {
                 return;
             }
+            const updateBreakdown = {};
+            const timeSection = (key, fn) => {
+                const start = performance.now();
+                const result = fn();
+                updateBreakdown[key] = (updateBreakdown[key] || 0) + (performance.now() - start);
+                return result;
+            };
             this.normalizePlacedStructureFootprints();
 
             const seasonPace = this.getSimulationKnob('seasonPace');
             const scaledDt = dt * this.simulationSpeed;
+            const performanceProfile = this.getSimulationPerformanceProfile();
             this.elapsed += scaledDt;
             this.timeOfDay += (scaledDt * seasonPace) / DAY_DURATION;
             while (this.timeOfDay >= 1) {
@@ -4782,7 +5099,9 @@
                 this.weatherDuration = 42 + this.rng() * 34;
                 this.weatherTimer = this.weatherDuration;
             }
-            this.weatherManager.update(scaledDt);
+            timeSection('weather', () => {
+                this.weatherManager.update(scaledDt);
+            });
 
             this.godMode.protectBubbleTtl = Math.max(0, this.godMode.protectBubbleTtl - scaledDt);
             this.godMode.divineSuggestion.ttl = Math.max(0, this.godMode.divineSuggestion.ttl - scaledDt);
@@ -4791,47 +5110,199 @@
                 this.godMode.divineSuggestion.source = null;
             }
 
-            this.updateCamp(scaledDt);
-            this.ensureSettlementProjects();
-            this.updateLandUse(scaledDt);
-            this.updateFoodCulture(scaledDt);
-            this.updateInstitutionLife(scaledDt);
-            this.updatePhase9WorldResponse(scaledDt);
-            this.updateBuildings(scaledDt);
-            this.updateResources(scaledDt);
-            this.updateBranchColonies(scaledDt);
-            this.updateFactionParties(scaledDt);
-            this.updateFactionEffects(scaledDt);
-            this.updateBattlefronts(scaledDt);
-            this.updateWarAftermath(scaledDt);
-            this.updateAnimals(scaledDt);
-            this.updatePredators(scaledDt);
-
-            for (const colonist of this.colonists) {
-                colonist.awarenessScanCooldown = Math.max(0, (colonist.awarenessScanCooldown || 0) - scaledDt);
-                if (colonist.awarenessScanCooldown <= 0) {
-                    this.observeNearbyResources(colonist);
-                    colonist.awarenessScanCooldown = COLONIST_AWARENESS_SCAN_MIN + this.rng() * (COLONIST_AWARENESS_SCAN_MAX - COLONIST_AWARENESS_SCAN_MIN);
-                }
-                colonist.update(scaledDt, this);
-            }
-            this.colonists = this.colonists.filter((colonist) => {
-                if (!colonist.alive) {
-                    this.recordDeath(colonist);
-                    return false;
-                }
-                return true;
+            timeSection('camp', () => {
+                this.updateCamp(scaledDt);
             });
-            this.updateFamilyUnits(scaledDt);
-            this.updateRelationshipsAndConflict(scaledDt);
-            this.updateRituals(scaledDt);
-            this.maybeFoundBranchColony();
-            this.evaluateLegacyMilestones();
+            timeSection('projects', () => {
+                this.ensureSettlementProjects();
+            });
+            timeSection('landUse', () => {
+                this.updateLandUse(scaledDt);
+            });
+            timeSection('foodCulture', () => {
+                this.updateFoodCulture(scaledDt);
+            });
+            if (this.shouldRunCadencedSystem('institutionLife', scaledDt, performanceProfile.institutionLifeInterval)) {
+                timeSection('institutionLife', () => {
+                    this.updateInstitutionLife(this.consumeCadencedSystemDt('institutionLife', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('phase9WorldResponse', scaledDt, performanceProfile.phase9Interval)) {
+                timeSection('phase9', () => {
+                    this.updatePhase9WorldResponse(this.consumeCadencedSystemDt('phase9WorldResponse', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('buildings', scaledDt, performanceProfile.buildingInterval)) {
+                timeSection('buildings', () => {
+                    this.updateBuildings(this.consumeCadencedSystemDt('buildings', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('resources', scaledDt, performanceProfile.resourceInterval)) {
+                timeSection('resources', () => {
+                    this.updateResources(this.consumeCadencedSystemDt('resources', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('branchColonies', scaledDt, performanceProfile.branchInterval)) {
+                timeSection('branchColonies', () => {
+                    this.updateBranchColonies(this.consumeCadencedSystemDt('branchColonies', scaledDt));
+                });
+            }
+            timeSection('factionParties', () => {
+                this.updateFactionParties(scaledDt);
+            });
+            timeSection('factionEffects', () => {
+                this.updateFactionEffects(scaledDt);
+            });
+            timeSection('battlefronts', () => {
+                this.updateBattlefronts(scaledDt);
+            });
+            timeSection('warAftermath', () => {
+                this.updateWarAftermath(scaledDt);
+            });
+            timeSection('animals', () => {
+                this.updateAnimals(scaledDt);
+            });
+            timeSection('predators', () => {
+                this.updatePredators(scaledDt);
+            });
+
+            const decisionStride = performanceProfile.colonistDecisionStride;
+            const updateStride = performanceProfile.colonistUpdateStride || 1;
+            const currentDecisionBatch = this.colonistDecisionBatch;
+            const currentUpdateBatch = this.colonistUpdateBatch;
+            timeSection('colonists', () => {
+                for (let index = 0; index < this.colonists.length; index += 1) {
+                    const colonist = this.colonists[index];
+                    colonist.awarenessScanCooldown = Math.max(0, (colonist.awarenessScanCooldown || 0) - scaledDt);
+                    if (colonist.awarenessScanCooldown <= 0) {
+                        this.observeNearbyResources(colonist);
+                        colonist.awarenessScanCooldown = COLONIST_AWARENESS_SCAN_MIN + this.rng() * (COLONIST_AWARENESS_SCAN_MAX - COLONIST_AWARENESS_SCAN_MIN);
+                    }
+                    const lowPriority =
+                        colonist.alive &&
+                        colonist.intent !== 'war' &&
+                        colonist.intent !== 'protect' &&
+                        !colonist.threat &&
+                        this.selectedEntity !== colonist;
+                    const skipDecision = decisionStride > 1 &&
+                        lowPriority &&
+                        colonist.plan.length > 0 &&
+                        (index % decisionStride) !== currentDecisionBatch;
+                    const deferUpdate = updateStride > 1 &&
+                        lowPriority &&
+                        colonist.plan.length > 0 &&
+                        (index % updateStride) !== currentUpdateBatch;
+                    if (deferUpdate) {
+                        colonist.deferredUpdateDt = Math.min(0.18, (colonist.deferredUpdateDt || 0) + scaledDt);
+                        continue;
+                    }
+                    const effectiveDt = scaledDt + Math.min(0.18, colonist.deferredUpdateDt || 0);
+                    colonist.deferredUpdateDt = 0;
+                    colonist.update(effectiveDt, this, {
+                        skipDecision,
+                        lowPriorityLod: lowPriority && performanceProfile.mobile
+                    });
+                }
+            });
+            this.colonistDecisionBatch = (currentDecisionBatch + 1) % Math.max(1, decisionStride);
+            this.colonistUpdateBatch = (currentUpdateBatch + 1) % Math.max(1, updateStride);
+            timeSection('colonistCleanup', () => {
+                this.colonists = this.colonists.filter((colonist) => {
+                    if (!colonist.alive) {
+                        this.recordDeath(colonist);
+                        return false;
+                    }
+                    return true;
+                });
+            });
+            if (this.shouldRunCadencedSystem('familyUnits', scaledDt, performanceProfile.familyInterval)) {
+                timeSection('families', () => {
+                    this.updateFamilyUnits(this.consumeCadencedSystemDt('familyUnits', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('relationships', scaledDt, performanceProfile.relationshipInterval)) {
+                timeSection('relationships', () => {
+                    this.updateRelationshipsAndConflict(this.consumeCadencedSystemDt('relationships', scaledDt));
+                });
+            }
+            if (this.shouldRunCadencedSystem('rituals', scaledDt, performanceProfile.ritualInterval)) {
+                timeSection('rituals', () => {
+                    this.updateRituals(this.consumeCadencedSystemDt('rituals', scaledDt));
+                });
+            }
+            timeSection('legacy', () => {
+                this.maybeFoundBranchColony();
+                this.evaluateLegacyMilestones();
+            });
+
+            let hottestUpdateSection = null;
+            let hottestUpdateMs = 0;
+            for (const [key, value] of Object.entries(updateBreakdown)) {
+                if (value > hottestUpdateMs) {
+                    hottestUpdateMs = value;
+                    hottestUpdateSection = key;
+                }
+            }
+            this.performanceTelemetry.updateBreakdown = Object.fromEntries(
+                Object.entries(updateBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))])
+            );
+            this.performanceTelemetry.hottestUpdateSection = hottestUpdateSection;
+            this.performanceTelemetry.hottestUpdateMs = Number(hottestUpdateMs.toFixed(2));
 
             if (this.colonists.length === 0 && !this.extinctionSnapshot) {
                 this.extinctionSnapshot = this.exportLineageMemory();
                 this.pushEvent(`Generation ${this.generation} was lost. Their lessons are being preserved.`);
             }
+        }
+
+        getSimulationPerformanceProfile() {
+            const coarsePointer = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+                ? window.matchMedia('(pointer: coarse)').matches
+                : false;
+            const population = this.colonists.length;
+            const mobile = coarsePointer;
+            const stressed = population >= 18;
+            const crowded = population >= 24;
+            const dense = population >= 32;
+            const veryDense = population >= 40;
+            return {
+                mobile,
+                stressed,
+                crowded,
+                dense,
+                veryDense,
+                colonistUpdateStride:
+                    mobile && veryDense ? 3 :
+                    mobile && dense ? 2 : 1,
+                colonistDecisionStride:
+                    mobile && veryDense ? 5 :
+                    mobile && dense ? 4 :
+                    mobile && crowded ? 3 :
+                    mobile && stressed ? 2 : 1,
+                institutionLifeInterval: mobile && veryDense ? 0.52 : mobile && dense ? 0.4 : mobile && stressed ? 0.3 : 0,
+                phase9Interval: mobile && veryDense ? 0.65 : mobile && dense ? 0.52 : mobile && stressed ? 0.42 : 0,
+                buildingInterval: mobile && veryDense ? 0.34 : mobile && dense ? 0.28 : mobile && stressed ? 0.22 : 0,
+                resourceInterval: mobile && veryDense ? 0.36 : mobile && dense ? 0.3 : mobile && stressed ? 0.24 : 0,
+                branchInterval: mobile && veryDense ? 0.55 : mobile && dense ? 0.44 : mobile && stressed ? 0.36 : 0,
+                familyInterval: mobile && veryDense ? 1.15 : mobile && dense ? 0.82 : mobile && stressed ? 0.55 : 0,
+                relationshipInterval: mobile && veryDense ? 1.1 : mobile && dense ? 0.72 : mobile && stressed ? 0.42 : 0,
+                ritualInterval: mobile && veryDense ? 1.5 : mobile && dense ? 1 : mobile && stressed ? 0.7 : 0
+            };
+        }
+
+        shouldRunCadencedSystem(key, dt, interval = 0) {
+            if (interval <= 0) {
+                this.systemCadence[key] = 0;
+                return true;
+            }
+            this.systemCadence[key] = (this.systemCadence[key] || 0) + dt;
+            return this.systemCadence[key] >= interval;
+        }
+
+        consumeCadencedSystemDt(key, fallbackDt) {
+            const dt = this.systemCadence[key];
+            this.systemCadence[key] = 0;
+            return Math.max(fallbackDt, dt || 0);
         }
 
         updateCamp(dt) {
@@ -4941,71 +5412,146 @@
 
         updateBranchColonies(dt) {
             this.mainAttackCooldown = Math.max(0, this.mainAttackCooldown - dt);
-            for (const colony of this.getActiveBranchColonies()) {
+            this.mainOffenseEvalCooldown = Math.max(0, this.mainOffenseEvalCooldown - dt);
+            const performanceProfile = this.getSimulationPerformanceProfile();
+            const activeColonies = this.getActiveBranchColonies();
+            const branchByName = new Map(activeColonies.map((colony) => [colony.name, colony]));
+            const branchTiming = {};
+            const timeBranch = (key, fn) => {
+                const start = performance.now();
+                const result = fn();
+                branchTiming[key] = (branchTiming[key] || 0) + (performance.now() - start);
+                return result;
+            };
+            const branchContext = {
+                activeColonies,
+                branchByName
+            };
+            for (const colony of activeColonies) {
                 if (!colony.factionIdentity) {
                     Object.assign(colony, this.normalizeBranchColony(colony, colony.id - 1));
                 }
-                this.updateFactionArmy(colony, dt);
+                timeBranch('army', () => {
+                    this.updateFactionArmy(colony, dt);
+                });
                 colony.tradeCooldown = Math.max(0, (colony.tradeCooldown || 0) - dt);
                 colony.infoCooldown = Math.max(0, (colony.infoCooldown || 0) - dt);
                 colony.raidCooldown = Math.max(0, (colony.raidCooldown || 0) - dt);
                 colony.diplomacyCooldown = Math.max(0, (colony.diplomacyCooldown || 0) - dt);
                 colony.supportCooldown = Math.max(0, (colony.supportCooldown || 0) - dt);
+                colony.resourceScanCooldown = Math.max(0, (colony.resourceScanCooldown || 0) - dt);
+                colony.strategicEvalCooldown = Math.max(0, (colony.strategicEvalCooldown || 0) - dt);
                 colony.population = clamp(colony.population + dt * 0.002, 2, 8); // colony population
                 const radius = this.getBranchTerritoryRadius(colony);
-                const nearbyResources = this.resources.filter((resource) =>
-                    !resource.depleted && distance(resource, colony) < radius
+                let nearbyResources = (colony.cachedNearbyResources || []).filter((resource) =>
+                    resource && !resource.depleted && distance(resource, colony) < radius
                 );
+                timeBranch('resources', () => {
+                    if (colony.resourceScanCooldown <= 0 || nearbyResources.length === 0) {
+                        nearbyResources = this.resources.filter((resource) =>
+                            !resource.depleted && distance(resource, colony) < radius
+                        );
+                        colony.cachedNearbyResources = nearbyResources;
+                        colony.cachedLocalResourceCount = nearbyResources.length;
+                        const baseScan = performanceProfile.mobile ? 1.2 : 0.8;
+                        const extraScan = performanceProfile.dense ? 0.9 : 0.4;
+                        colony.resourceScanCooldown = baseScan + extraScan + this.rng() * 0.7;
+                    } else {
+                        colony.cachedLocalResourceCount = nearbyResources.length;
+                    }
+                });
                 let foodGain = 0;
                 let waterGain = 0;
-                for (const resource of nearbyResources) {
-                    if (resource.type === 'berries') {
-                        const gathered = Math.min(resource.amount, dt * 0.08);
-                        resource.amount = Math.max(0, resource.amount - gathered);
-                        foodGain += gathered * 0.65;
-                    } else if (resource.type === 'water') {
-                        const gathered = Math.min(resource.amount, dt * 0.07);
-                        resource.amount = Math.max(0, resource.amount - gathered);
-                        waterGain += gathered * 0.9;
-                    } else if (resource.type === 'trees') {
-                        const gathered = Math.min(resource.amount, dt * 0.045);
-                        resource.amount = Math.max(0, resource.amount - gathered);
-                        colony.wood = clamp((colony.wood || 0) + gathered * 0.55, 0, 80);
-                    } else if (resource.type === 'stone') {
-                        const gathered = Math.min(resource.amount, dt * 0.03);
-                        resource.amount = Math.max(0, resource.amount - gathered);
-                        colony.stone = clamp((colony.stone || 0) + gathered * 0.45, 0, 70);
+                timeBranch('harvest', () => {
+                    for (const resource of nearbyResources) {
+                        if (resource.type === 'berries') {
+                            const gathered = Math.min(resource.amount, dt * 0.08);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            foodGain += gathered * 0.65;
+                        } else if (resource.type === 'water') {
+                            const gathered = Math.min(resource.amount, dt * 0.07);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            waterGain += gathered * 0.9;
+                        } else if (resource.type === 'trees') {
+                            const gathered = Math.min(resource.amount, dt * 0.045);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            colony.wood = clamp((colony.wood || 0) + gathered * 0.55, 0, 80);
+                        } else if (resource.type === 'stone') {
+                            const gathered = Math.min(resource.amount, dt * 0.03);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            colony.stone = clamp((colony.stone || 0) + gathered * 0.45, 0, 70);
+                        }
+                        if (resource.amount <= 0.05) {
+                            this.triggerRespawnCooldown(resource);
+                        }
                     }
-                    if (resource.amount <= 0.05) {
-                        this.triggerRespawnCooldown(resource);
-                    }
-                }
+                });
                 colony.food = clamp((colony.food || 10) + foodGain - dt * (0.055 + colony.population * 0.01), 0, 140);
                 colony.water = clamp((colony.water || 8) + waterGain - dt * (0.06 + colony.population * 0.012), 0, 140);
-                this.updateFactionDiplomacy(colony, dt);
-                this.updateFactionCampaign(colony, dt);
-                this.resolveFactionBattleSupport(colony);
+                if (colony.strategicEvalCooldown <= 0) {
+                    timeBranch('diplomacy', () => {
+                        this.updateFactionDiplomacy(colony, dt, branchContext);
+                    });
+                    timeBranch('campaign', () => {
+                        this.updateFactionCampaign(colony, dt, branchContext);
+                    });
+                    timeBranch('battleSupport', () => {
+                        this.resolveFactionBattleSupport(colony);
+                    });
+                    const baseStrategic = performanceProfile.mobile ? 1.45 : 0.9;
+                    const extraStrategic = performanceProfile.dense ? 0.9 : 0.35;
+                    colony.strategicEvalCooldown = baseStrategic + extraStrategic + this.rng() * 0.8;
+                }
                 if (colony.tradeCooldown <= 0) {
-                    this.resolveFactionTrade(colony);
+                    timeBranch('trade', () => {
+                        this.resolveFactionTrade(colony);
+                    });
                 }
                 if (colony.infoCooldown <= 0) {
-                    this.resolveFactionKnowledgeExchange(colony);
+                    timeBranch('knowledge', () => {
+                        this.resolveFactionKnowledgeExchange(colony);
+                    });
                 }
                 if (colony.raidCooldown <= 0) {
-                    this.resolveFactionRaid(colony);
+                    timeBranch('raid', () => {
+                        this.resolveFactionRaid(colony);
+                    });
                 }
-                this.resolveFactionMigration(colony, dt);
-                if ((colony.infoCooldown || 0) <= 12) {
-                    this.absorbBranchKnowledge(colony);
+                timeBranch('migration', () => {
+                    this.resolveFactionMigration(colony, dt);
+                });
+                if ((colony.infoCooldown || 0) <= 12 && colony.strategicEvalCooldown <= 0.35) {
+                    timeBranch('absorbKnowledge', () => {
+                        this.absorbBranchKnowledge(colony);
+                    });
                 }
             }
-            this.resolveIntercolonyBattles(dt);
+            timeBranch('intercolonyBattles', () => {
+                this.resolveIntercolonyBattles(dt, branchContext);
+            });
             if (this.mainAttackCooldown <= 0) {
-                this.resolveMainAllianceRelief();
+                timeBranch('mainRelief', () => {
+                    this.resolveMainAllianceRelief(branchContext);
+                });
             }
             if (this.mainAttackCooldown <= 0) {
-                this.resolveMainColonyOffense(dt);
+                timeBranch('mainOffense', () => {
+                    this.resolveMainColonyOffense(dt, branchContext);
+                });
             }
+            let hottestBranchSection = null;
+            let hottestBranchMs = 0;
+            for (const [key, value] of Object.entries(branchTiming)) {
+                if (value > hottestBranchMs) {
+                    hottestBranchMs = value;
+                    hottestBranchSection = key;
+                }
+            }
+            this.performanceTelemetry.branchUpdateBreakdown = Object.fromEntries(
+                Object.entries(branchTiming).map(([key, value]) => [key, Number(value.toFixed(2))])
+            );
+            this.performanceTelemetry.hottestBranchSection = hottestBranchSection;
+            this.performanceTelemetry.hottestBranchMs = Number(hottestBranchMs.toFixed(2));
         }
 
         resolveFactionBattleSupport(colony) {
@@ -5073,8 +5619,9 @@
             colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 22, colony.type === 'daughter' ? 58 : 40);
         }
 
-        resolveMainAllianceRelief() {
-            const targetColony = this.getActiveBranchColonies()
+        resolveMainAllianceRelief(branchContext = null) {
+            const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+            const targetColony = activeColonies
                 .filter((colony) => colony.type !== 'daughter' && colony.diplomacyState === 'allied')
                 .map((colony) => ({ colony, threat: this.getColonyThreatScore(colony) }))
                 .filter((entry) => entry.threat > 0.46)
@@ -5082,7 +5629,7 @@
             if (!targetColony) {
                 return false;
             }
-            const aggressor = this.getPrimaryThreatSource(targetColony);
+            const aggressor = this.getPrimaryThreatSource(targetColony, activeColonies);
             if (!aggressor) {
                 return false;
             }
@@ -5169,12 +5716,14 @@
             return true;
         }
 
-        resolveIntercolonyBattles() {
-            for (const colony of this.getActiveBranchColonies()) {
+        resolveIntercolonyBattles(dt, branchContext = null) {
+            const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+            const branchByName = branchContext?.branchByName || new Map(activeColonies.map((colony) => [colony.name, colony]));
+            for (const colony of activeColonies) {
                 if ((colony.army?.recovery || 0) > 0 || colony.diplomacyState !== 'rival') {
                     continue;
                 }
-                const target = this.getIntercolonyTarget(colony);
+                const target = this.getIntercolonyTarget(colony, activeColonies, branchByName);
                 if (!target) {
                     continue;
                 }
@@ -5257,14 +5806,17 @@
             }
         }
 
-        updateFactionDiplomacy(colony, dt) {
+        updateFactionDiplomacy(colony, dt, branchContext = null) {
             const identity = colony.factionIdentity;
             const distanceToCamp = distance(colony, this.camp);
             const localRadius = this.getBranchTerritoryRadius(colony);
-            const localResourceCount = this.resources.filter((resource) =>
-                !resource.depleted && distance(resource, colony) < localRadius
-            ).length;
-            const overlapPressure = this.getActiveBranchColonies()
+            const localResourceCount = Number.isFinite(colony.cachedLocalResourceCount)
+                ? colony.cachedLocalResourceCount
+                : this.resources.filter((resource) =>
+                    !resource.depleted && distance(resource, colony) < localRadius
+                ).length;
+            const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+            const overlapPressure = activeColonies
                 .filter((peer) => peer.id !== colony.id)
                 .reduce((sum, peer) => {
                     const gap = distance(colony, peer);
@@ -5341,13 +5893,15 @@
             }
         }
 
-        updateFactionCampaign(colony, dt) {
+        updateFactionCampaign(colony, dt, branchContext = null) {
             const campaign = colony.campaign || (colony.campaign = { state: 'idle', pressure: 0, duration: 0, target: 'camp', strategy: 'watchful' });
             const eraProfile = this.getEraDiplomacyProfile();
             campaign.strategy = this.getCampaignStrategy(colony);
             if (campaign.state === 'active') {
                 const strategy = campaign.strategy || 'watchful';
-                const targetColony = this.getBranchColonyByName(campaign.target);
+                const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+                const branchByName = branchContext?.branchByName || new Map(activeColonies.map((entry) => [entry.name, entry]));
+                const targetColony = this.getBranchColonyByName(campaign.target, activeColonies, branchByName);
                 campaign.duration = Math.max(0, campaign.duration - dt);
                 const pressureDelta = strategy === 'total war'
                     ? colony.borderFriction * 0.008 + colony.factionIdentity.militaryTendency * 0.006 + (colony.warMemory?.desireForRevenge || 0) * 0.004
@@ -5435,7 +5989,9 @@
                 )
             ) {
                 campaign.state = 'active';
-                campaign.target = this.getIntercolonyTarget(colony)?.name || 'camp';
+                const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+                const branchByName = branchContext?.branchByName || new Map(activeColonies.map((entry) => [entry.name, entry]));
+                campaign.target = this.getIntercolonyTarget(colony, activeColonies, branchByName)?.name || 'camp';
                 campaign.pressure = clamp(
                     0.42 + colony.borderFriction * 0.35 + colony.factionIdentity.envy * 0.15,
                     0,
@@ -5472,7 +6028,8 @@
                 )
             ) {
                 campaign.state = 'active';
-                campaign.target = this.getPrimaryThreatSource(colony)?.name || 'camp';
+                const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+                campaign.target = this.getPrimaryThreatSource(colony, activeColonies)?.name || 'camp';
                 campaign.pressure = clamp(0.3 + colony.factionIdentity.tradeTendency * 0.2 + colony.factionIdentity.trust * 0.15, 0, 1);
                 campaign.duration = 56 + this.rng() * 36;
                 campaign.strategy = 'support campaign';
@@ -5812,7 +6369,7 @@
             if (colony.diplomacyState !== 'rival') {
                 return;
             }
-            const army = colony.army || this.normalizeBranchColony(colony, colony.id - 1).army;
+            const army = this.ensureBranchArmy(colony);
             if ((army.recovery || 0) > 0 || (army.available || 0) < 1.5) {
                 return;
             }
@@ -5887,8 +6444,13 @@
             colony.raidCooldown = 56 + this.rng() * 36;
         }
 
-        resolveMainColonyOffense() {
-            const rivals = this.getActiveBranchColonies()
+        resolveMainColonyOffense(dt = 0, branchContext = null) {
+            if (this.mainOffenseEvalCooldown > 0) {
+                return false;
+            }
+            const mobileMode = this.getSimulationPerformanceProfile().mobile;
+            const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
+            const rivals = activeColonies
                 .filter((colony) => colony.diplomacyState === 'rival')
                 .sort((left, right) => (
                     (right.borderFriction + (right.campaign?.pressure || 0) + (right.factionIdentity?.envy || 0)) -
@@ -5896,12 +6458,14 @@
                 ));
             const target = rivals[0] || null;
             if (!target) {
+                this.mainOffenseEvalCooldown = mobileMode ? 12 + this.rng() * 8 : 5 + this.rng() * 4;
                 return false;
             }
             const offense = this.getMainColonyAttackSummary();
             const stability = this.getColonyStability();
             const defenseReserve = this.getCampDefenseSummary().militia;
             if (offense.attackers.length < 2 || stability < 0.42 || defenseReserve < 2) {
+                this.mainOffenseEvalCooldown = mobileMode ? 8 + this.rng() * 6 : 3 + this.rng() * 3;
                 return false;
             }
 
@@ -5920,6 +6484,7 @@
                 clamp((target.borderFriction || 0) * 0.12 + (target.campaign?.pressure || 0) * 0.16, 0, 0.18);
             if (this.rng() > launchChance) {
                 this.mainAttackCooldown = 10 + this.rng() * 10;
+                this.mainOffenseEvalCooldown = mobileMode ? 10 + this.rng() * 8 : 4 + this.rng() * 4;
                 return false;
             }
 
@@ -5970,6 +6535,7 @@
             target.recentAction = 'under attack';
             this.recordFactionEvent(`The main settlement marched on ${target.name} in a ${reportType}.`);
             this.mainAttackCooldown = 34 + this.rng() * 20;
+            this.mainOffenseEvalCooldown = mobileMode ? 16 + this.rng() * 10 : 6 + this.rng() * 5;
             return true;
         }
 
@@ -8646,6 +9212,22 @@
             }, 0);
         }
 
+        getDesiredWoodReserve() {
+            const populationReserve = Math.ceil(this.colonists.length * 0.35);
+            const fireReserve = this.camp.fireFuel < 10 ? 6 : 3;
+            const constructionReserve = Math.ceil(this.getConstructionDemand('wood'));
+            const eraBonus = this.hasTechnology('engineering') ? 4 : this.hasTechnology('masonry') ? 2 : 0;
+            return clamp(8 + populationReserve + fireReserve + constructionReserve + eraBonus, 8, 28);
+        }
+
+        getWoodShortfall() {
+            return Math.max(0, this.getDesiredWoodReserve() - this.camp.wood);
+        }
+
+        getWoodSurplusPenalty() {
+            return Math.max(0, this.camp.wood - this.getDesiredWoodReserve());
+        }
+
         getConstructionMaterialAvailable(material) {
             if (material === 'wood') {
                 return this.camp.wood;
@@ -8686,7 +9268,7 @@
                 if (available <= 0) {
                     continue;
                 }
-                const stepAmount = Math.min(remaining, available, material === 'wood' ? 2 : 1);
+                const stepAmount = Math.min(remaining, available, material === 'wood' ? 4 : material === 'stone' ? 2 : 1);
                 return { material, amount: stepAmount };
             }
             return null;
@@ -8705,7 +9287,10 @@
             const housingPressure = clamp((1 - this.getHousingSatisfaction()) * 70, 0, 40);
             const materialDemand = Object.values(this.getProjectRequirements(project)).reduce((sum, amount) => sum + amount, 0);
             const stockpilePressure = project.type === 'farmPlot' || project.type === 'storage' ? this.getStockpilePressure() * 4 : 0;
-            return 18 + housingPressure + materialDemand * 0.8 + stockpilePressure + colonist.skills.building * 1.2 + this.getRoleBias(colonist, 'builder') * 10;
+            const pendingMaterial = this.getProjectPendingMaterial(project);
+            const haulUrgency = pendingMaterial ? pendingMaterial.amount * 5 + (pendingMaterial.material === 'wood' ? 4 : 0) : 0;
+            const buildUrgency = this.projectHasAllMaterials(project) ? 16 : 0;
+            return 24 + housingPressure + materialDemand * 0.95 + stockpilePressure + haulUrgency + buildUrgency + colonist.skills.building * 1.2 + this.getRoleBias(colonist, 'builder') * 10;
         }
 
         buildConstructionPlan(colonist) {
@@ -10975,6 +11560,7 @@
                     lastSeasonName: this.lastSeasonName,
                     structureRaidCooldown: this.structureRaidCooldown,
                     mainAttackCooldown: this.mainAttackCooldown,
+                    mainOffenseEvalCooldown: this.mainOffenseEvalCooldown,
                     weatherDamageCooldown: this.weatherDamageCooldown,
                     lightningStrikeCooldown: this.lightningStrikeCooldown,
                     lastResolvedLightningFlash: this.lastResolvedLightningFlash,
@@ -11069,6 +11655,7 @@
             this.lastSeasonName = state.lastSeasonName || this.lastSeasonName;
             this.structureRaidCooldown = state.structureRaidCooldown ?? 0;
             this.mainAttackCooldown = state.mainAttackCooldown ?? 30;
+            this.mainOffenseEvalCooldown = state.mainOffenseEvalCooldown ?? 0;
             this.weatherDamageCooldown = state.weatherDamageCooldown ?? 0;
             this.lightningStrikeCooldown = state.lightningStrikeCooldown ?? 0;
             this.lastResolvedLightningFlash = state.lastResolvedLightningFlash ?? 0;
@@ -11111,6 +11698,9 @@
             this.resources = clone(state.resources || []);
             this.animals = clone(state.animals || []);
             this.predators = clone(state.predators || []);
+            this.mainColonyAttackSummaryCache = null;
+            this.campDefenseSummaryCache = null;
+            this.colonyStabilityCache = null;
             this.thoughts = clone(state.thoughts || []);
             this.events = clone(state.events || []);
             this.colonyMetrics = clone(state.colonyMetrics || {});
@@ -12075,6 +12665,17 @@
                     recent: this.achievementLog.slice(0, 8)
                 },
                 averages: Object.fromEntries(Object.entries(averages).map(([key, value]) => [key, Number(value.toFixed(1))])),
+                performance: {
+                    updateBreakdown: clone(this.performanceTelemetry.updateBreakdown || {}),
+                    hottestUpdateSection: this.performanceTelemetry.hottestUpdateSection || null,
+                    hottestUpdateMs: Number(((this.performanceTelemetry.hottestUpdateMs) || 0).toFixed(2)),
+                    branchUpdateBreakdown: clone(this.performanceTelemetry.branchUpdateBreakdown || {}),
+                    hottestBranchSection: this.performanceTelemetry.hottestBranchSection || null,
+                    hottestBranchMs: Number(((this.performanceTelemetry.hottestBranchMs) || 0).toFixed(2)),
+                    updateSlices: this.performanceTelemetry.sliceCount || 0,
+                    maxUpdateSlices: this.performanceTelemetry.maxSlices || 0,
+                    droppedUpdateTime: Number(((this.performanceTelemetry.droppedUpdateTime) || 0).toFixed(3))
+                },
                 lineage: {
                     lessons: this.lineageMemory.lessons.slice(0, 4),
                     knownResourceCounts: Object.fromEntries(

@@ -6,6 +6,13 @@
     const SAVE_PREFIX = 'ai-civ-sim-';
     const RUN_SAVE_VERSION = 1;
     const AUTOSAVE_INTERVAL = 45;
+    const AUDIO_SOURCES = [
+        'sounds/background.mp3',
+        'sounds/wind.mp3',
+        'sounds/rain.mp3',
+        'sounds/heavy_wind_rain.mp3',
+        'sounds/Thunder.mp3'
+    ];
 
     class AmbientAudioController {
         constructor(world, renderer) {
@@ -30,10 +37,12 @@
             this.lastLightningFlash = 0;
             this.lastThunderAt = -999;
             this.nextStormThunderGap = 5.5;
+            this.audioPreloadPromise = null;
             this.boundResume = () => this.resumeFromGesture();
             ['pointerdown', 'keydown', 'touchstart'].forEach((eventName) => {
                 window.addEventListener(eventName, this.boundResume, { passive: true });
             });
+            this.preloadAudioAssets();
         }
 
         setWorldAndRenderer(world, renderer) {
@@ -60,6 +69,25 @@
             return audio;
         }
 
+        preloadAudioAssets() {
+            if (this.audioPreloadPromise || typeof Audio === 'undefined') {
+                return this.audioPreloadPromise;
+            }
+            this.audioPreloadPromise = Promise.all(AUDIO_SOURCES.map((src) => new Promise((resolve) => {
+                const audio = new Audio(src);
+                audio.preload = 'auto';
+                const done = () => resolve();
+                audio.addEventListener('canplaythrough', done, { once: true });
+                audio.addEventListener('error', done, { once: true });
+                try {
+                    audio.load();
+                } catch (error) {
+                    resolve();
+                }
+            })));
+            return this.audioPreloadPromise;
+        }
+
         ensurePlayers() {
             if (this.players || !this.debugState.enabled) {
                 return;
@@ -78,6 +106,7 @@
                 this.createThunderPlayer('sounds/Thunder.mp3'),
                 this.createThunderPlayer('sounds/Thunder.mp3')
             ];
+            this.preloadAudioAssets();
             this.debugState.started = true;
             this.debugState.contextState = 'html-audio-ready';
         }
@@ -441,15 +470,67 @@
 
         let running = true;
         let lastTime = performance.now();
+        let lastUpdateDurationMs = 0;
+        let lastUiDurationMs = 0;
+        let lastPerfLogAt = 0;
+
+        function getFrameStepProfile() {
+            const coarsePointer = typeof window.matchMedia === 'function'
+                ? window.matchMedia('(pointer: coarse)').matches
+                : false;
+            const mobile = coarsePointer || Math.min(window.innerWidth || 1280, window.innerHeight || 720) <= 820;
+            const dense = world.colonists.length >= 32;
+            const veryDense = world.colonists.length >= 40;
+            const fastSim = world.simulationSpeed >= 4;
+            return {
+                maxSlices: mobile
+                    ? (veryDense || fastSim ? 2 : dense ? 3 : 4)
+                    : (veryDense || fastSim ? 4 : dense ? 5 : 6)
+            };
+        }
 
         function step(dt) {
             const fixed = 1 / 30;
             let remaining = Math.min(0.5, Math.max(0, dt));
-            while (remaining > 0) {
+            const updateStart = performance.now();
+            const frameProfile = getFrameStepProfile();
+            let slices = 0;
+            const aggregatedBreakdown = {};
+            while (remaining > 0 && slices < frameProfile.maxSlices) {
                 const slice = Math.min(fixed, remaining);
                 world.update(slice);
+                const sliceBreakdown = world.performanceTelemetry?.updateBreakdown || {};
+                Object.entries(sliceBreakdown).forEach(([key, value]) => {
+                    aggregatedBreakdown[key] = (aggregatedBreakdown[key] || 0) + Number(value || 0);
+                });
                 remaining -= slice;
+                slices += 1;
             }
+            if (remaining > 0) {
+                world.performanceTelemetry.droppedUpdateTime = Number(remaining.toFixed(3));
+            } else {
+                world.performanceTelemetry.droppedUpdateTime = 0;
+            }
+            let hottestUpdateSection = null;
+            let hottestUpdateMs = 0;
+            Object.entries(aggregatedBreakdown).forEach(([key, value]) => {
+                const rounded = Number(value.toFixed(2));
+                aggregatedBreakdown[key] = rounded;
+                if (rounded > hottestUpdateMs) {
+                    hottestUpdateMs = rounded;
+                    hottestUpdateSection = key;
+                }
+            });
+            world.performanceTelemetry.updateBreakdown = aggregatedBreakdown;
+            world.performanceTelemetry.hottestUpdateSection = hottestUpdateSection;
+            world.performanceTelemetry.hottestUpdateMs = Number(hottestUpdateMs.toFixed(2));
+            world.performanceTelemetry.sliceCount = slices;
+            world.performanceTelemetry.fixedStep = fixed;
+            world.performanceTelemetry.maxSlices = frameProfile.maxSlices;
+            if (remaining > 0) {
+                world.performanceTelemetry.lastCatchupDropAt = performance.now();
+            }
+            lastUpdateDurationMs = performance.now() - updateStart;
             if (world.colonists.length === 0 && world.extinctionSnapshot && !extinctionHandled) {
                 extinctionHandled = true;
                 respawnFromLineage(world.extinctionSnapshot);
@@ -458,7 +539,7 @@
                 saveCurrentRunState('autosave', false);
             }
             renderer.render();
-            ui.refresh();
+            lastUiDurationMs = ui.refresh() || 0;
         }
 
         function frame(now) {
@@ -466,12 +547,18 @@
                 return;
             }
             const dt = (now - lastTime) / 1000;
+            const frameMs = Math.max(0, now - lastTime);
             lastTime = now;
             if (!manualStepping) {
                 step(dt);
             } else {
                 renderer.render();
-                ui.refresh();
+                lastUiDurationMs = ui.refresh() || 0;
+            }
+            renderer.recordFrameMetrics(frameMs, lastUpdateDurationMs, lastUiDurationMs);
+            if (world.debugFlags?.showPerformance && now - lastPerfLogAt >= 5000) {
+                console.info('[AI Civ Sim perf]', renderer.getPerformanceSnapshot());
+                lastPerfLogAt = now;
             }
             audioUpdateAccumulator += dt;
             if (audioUpdateAccumulator >= audioUpdateInterval) {
@@ -516,12 +603,14 @@
             step(Math.max(0, ms) / 1000);
             ambientAudio.update();
             audioUpdateAccumulator = 0;
+            renderer.recordFrameMetrics(Math.max(0, ms), lastUpdateDurationMs, lastUiDurationMs);
             return Promise.resolve();
         };
         window.render_game_to_text = () => {
             try {
                 const payload = JSON.parse(world.getSummaryText());
                 payload.audio = ambientAudio.getDebugState();
+                payload.performance = renderer.getPerformanceSnapshot();
                 return JSON.stringify(payload);
             } catch {
                 return world.getSummaryText();

@@ -3,14 +3,14 @@
 
     function setText(id, value) {
         const node = document.getElementById(id);
-        if (node) {
+        if (node && node.textContent !== value) {
             node.textContent = value;
         }
     }
 
     function setNodeText(id, value) {
         const node = document.getElementById(id);
-        if (node) {
+        if (node && node.textContent !== value) {
             node.textContent = value;
         }
     }
@@ -19,9 +19,12 @@
         const labelNode = document.getElementById(labelId);
         const valueNode = document.getElementById(valueId);
         if (labelNode && labelNode.childNodes.length > 0) {
-            labelNode.childNodes[0].nodeValue = `${label}: `;
+            const nextLabel = `${label}: `;
+            if (labelNode.childNodes[0].nodeValue !== nextLabel) {
+                labelNode.childNodes[0].nodeValue = nextLabel;
+            }
         }
-        if (valueNode) {
+        if (valueNode && valueNode.textContent !== value) {
             valueNode.textContent = value;
         }
     }
@@ -66,10 +69,73 @@
             this.touchMode = null;
             this.touchDistance = 0;
             this.touchCenter = null;
+            this.interactionFramePending = false;
+            this.renderCache = Object.create(null);
+            this.performanceProfile = this.detectPerformanceProfile();
             this.bindStaticLabels();
             this.bindButtons();
             this.bindCanvasSelection();
             this.bindResponsivePanels();
+        }
+
+        detectPerformanceProfile() {
+            const coarsePointer = typeof window.matchMedia === 'function'
+                ? window.matchMedia('(pointer: coarse)').matches
+                : false;
+            const narrowViewport = Math.min(window.innerWidth || 1280, window.innerHeight || 720) <= 820;
+            return {
+                mobile: coarsePointer || narrowViewport
+            };
+        }
+
+        getRefreshInterval() {
+            this.performanceProfile = this.detectPerformanceProfile();
+            if (this.performanceProfile.mobile && this.world.colonists.length >= 24) {
+                return 220;
+            }
+            if (this.performanceProfile.mobile || this.world.colonists.length >= 18) {
+                return 160;
+            }
+            return 120;
+        }
+
+        setCachedHtml(id, html) {
+            const node = document.getElementById(id);
+            if (!node) {
+                return;
+            }
+            if (this.renderCache[id] !== html) {
+                node.innerHTML = html;
+                this.renderCache[id] = html;
+            }
+        }
+
+        isPanelOpen(id) {
+            const node = document.getElementById(id);
+            if (!node) {
+                return false;
+            }
+            if (node.classList.contains('is-hidden') || node.classList.contains('is-collapsed')) {
+                return false;
+            }
+            if (node.style.display === 'none') {
+                return false;
+            }
+            return true;
+        }
+
+        scheduleInteractionRender(refreshUi = false) {
+            if (this.interactionFramePending) {
+                return;
+            }
+            this.interactionFramePending = true;
+            window.requestAnimationFrame(() => {
+                this.interactionFramePending = false;
+                this.renderer.render();
+                if (refreshUi) {
+                    this.refresh(true);
+                }
+            });
         }
 
         bindStaticLabels() {
@@ -138,6 +204,7 @@
                 'btn-place-daughter': 'Place Daughter',
                 'btn-place-rival': 'Place Rival',
                 'btn-toggle-build-ring': 'Build Ring Debug',
+                'btn-toggle-performance': 'Perf Debug',
                 'btn-paint-grassland': 'Paint Grassland',
                 'btn-paint-forest': 'Paint Forest',
                 'btn-paint-rocky': 'Paint Rocky',
@@ -221,6 +288,7 @@
                 'btn-place-daughter': () => this.world.placeFactionAtSelection('daughter'),
                 'btn-place-rival': () => this.world.placeFactionAtSelection('splinter'),
                 'btn-toggle-build-ring': () => this.world.toggleBuildRingDebug(),
+                'btn-toggle-performance': () => this.world.togglePerformanceDebug(),
                 'btn-paint-grassland': () => this.world.paintTerrainAtSelection('grassland'),
                 'btn-paint-forest': () => this.world.paintTerrainAtSelection('forest'),
                 'btn-paint-rocky': () => this.world.paintTerrainAtSelection('rocky'),
@@ -318,8 +386,7 @@
                 this.dragDistance += Math.abs(dx) + Math.abs(dy);
                 this.renderer.panBy(dx, dy);
                 this.lastPointer = { x: event.clientX, y: event.clientY };
-                this.renderer.render();
-                this.refresh(true);
+                this.scheduleInteractionRender(false);
             });
 
             const stopDrag = () => {
@@ -336,8 +403,7 @@
                 const screenY = event.clientY - rect.top;
                 const zoomFactor = event.deltaY < 0 ? 1.12 : 0.89;
                 this.renderer.zoomAt(screenX, screenY, zoomFactor);
-                this.renderer.render();
-                this.refresh(true);
+                this.scheduleInteractionRender(false);
             }, { passive: false });
 
             this.renderer.canvas.addEventListener('click', (event) => {
@@ -375,8 +441,7 @@
                     this.dragDistance += Math.abs(dx) + Math.abs(dy);
                     this.renderer.panBy(dx, dy);
                     this.lastPointer = { x: touch.clientX, y: touch.clientY };
-                    this.renderer.render();
-                    this.refresh(true);
+                    this.scheduleInteractionRender(false);
                 } else if (event.touches.length === 2) {
                     const nextDistance = this.getTouchDistance(event.touches);
                     const nextCenter = this.getTouchCenter(event.touches);
@@ -385,8 +450,7 @@
                         const rect = this.renderer.canvas.getBoundingClientRect();
                         this.renderer.zoomAt(nextCenter.x - rect.left, nextCenter.y - rect.top, zoomFactor);
                         this.renderer.panBy(nextCenter.x - this.touchCenter.x, nextCenter.y - this.touchCenter.y);
-                        this.renderer.render();
-                        this.refresh(true);
+                        this.scheduleInteractionRender(false);
                     }
                     this.touchMode = 'pinch';
                     this.touchDistance = nextDistance;
@@ -467,9 +531,11 @@
         }
 
         refresh(force) {
+            const refreshStart = performance.now();
             const now = performance.now();
-            if (!force && now - this.lastRenderStamp < 120) {
-                return;
+            const minInterval = this.getRefreshInterval();
+            if (!force && now - this.lastRenderStamp < minInterval) {
+                return 0;
             }
             this.lastRenderStamp = now;
 
@@ -516,13 +582,24 @@
             }
             setText('storage-value', storageParts.join(' | '));
 
-            this.renderThoughts();
-            this.renderEvents();
+            if (this.isPanelOpen('thought-rail')) {
+                this.renderThoughts();
+            }
+            if (this.isPanelOpen('log-panel')) {
+                this.renderEvents();
+            }
             this.renderSelection();
-            this.renderGodDrawer();
-            this.renderBattlefieldPanel();
-            this.renderBattleReport();
-            this.renderSaveStatus();
+            if (this.isPanelOpen('sidebar')) {
+                this.renderGodDrawer();
+                this.renderSaveStatus();
+            }
+            if (this.isPanelOpen('battle-panel') || (this.world.battlefronts || []).some((entry) => !entry.resolved && entry.ttl > 0)) {
+                this.renderBattlefieldPanel();
+            }
+            if (this.activeReportId || (this.world.battleReports || []).some((entry) => entry.popup)) {
+                this.renderBattleReport();
+            }
+            return performance.now() - refreshStart;
         }
 
         renderBattlefieldPanel() {
@@ -536,10 +613,7 @@
             if (!activeFront) {
                 panel.classList.add('is-hidden');
                 setNodeText('battle-meta', 'No active battles.');
-                const list = document.getElementById('battle-summary');
-                if (list) {
-                    list.innerHTML = '';
-                }
+                this.setCachedHtml('battle-summary', '');
                 return;
             }
 
@@ -579,7 +653,7 @@
             }
             const list = document.getElementById('battle-summary');
             if (list) {
-                list.innerHTML = detailLines.map((line) => `<li>${line}</li>`).join('');
+                this.setCachedHtml('battle-summary', detailLines.map((line) => `<li>${line}</li>`).join(''));
             }
         }
 
@@ -600,10 +674,14 @@
             const label = document.getElementById(`${id}-value`);
             const percent = `${Math.round(value)}%`;
             if (fill) {
-                fill.style.width = percent;
+                if (fill.style.width !== percent) {
+                    fill.style.width = percent;
+                }
             }
             if (label) {
-                label.textContent = percent;
+                if (label.textContent !== percent) {
+                    label.textContent = percent;
+                }
             }
         }
 
@@ -612,7 +690,7 @@
             if (!feed) {
                 return;
             }
-            feed.innerHTML = this.world.thoughts.map((line) => `<li>${line}</li>`).join('');
+            this.setCachedHtml('thought-feed', this.world.thoughts.map((line) => `<li>${line}</li>`).join(''));
         }
 
         renderEvents() {
@@ -620,7 +698,7 @@
             if (!log) {
                 return;
             }
-            log.innerHTML = this.world.events.map((line) => `<li>${line}</li>`).join('');
+            this.setCachedHtml('event-log', this.world.events.map((line) => `<li>${line}</li>`).join(''));
         }
 
         hideBattleReport() {
@@ -648,6 +726,7 @@
                 modal.classList.remove('is-visible');
                 modal.dataset.open = 'false';
                 modal.style.display = 'none';
+                this.setCachedHtml('report-list', '');
                 this.activeReportId = null;
                 return;
             }
@@ -674,7 +753,7 @@
                     `Attackers: ${latest.attackerCount || 0}`,
                     `Defenders: ${latest.defenderCount || 0}`
                 ].filter(Boolean);
-                list.innerHTML = details.map((entry) => `<li>${entry}</li>`).join('');
+                this.setCachedHtml('report-list', details.map((entry) => `<li>${entry}</li>`).join(''));
             }
             modal.classList.add('is-visible');
             modal.dataset.open = 'true';

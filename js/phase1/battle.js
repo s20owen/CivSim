@@ -526,10 +526,14 @@
                 }
             }
 
-            for (const scar of this.world.battleScars) {
+            for (let index = this.world.battleScars.length - 1; index >= 0; index -= 1) {
+                const scar = this.world.battleScars[index];
                 scar.ttl = Math.max(0, scar.ttl - dt);
+                if (scar.ttl <= 0) {
+                    this.world.battleScars.splice(index, 1);
+                    this.world.battleScarPool?.release(scar);
+                }
             }
-            this.world.battleScars = this.world.battleScars.filter((scar) => scar.ttl > 0);
             this.world.battlefronts = this.world.battlefronts.filter((front) => front.ttl > 0);
             return completed;
         }
@@ -872,13 +876,7 @@
 
             if (outcome === 'defenders') {
                 raidSummary = this.resolveInboundRaidOutcome(front, colony, false);
-                this.world.battleScars.push({
-                    x: front.x,
-                    y: front.y,
-                    radius: 12 + front.scale * 10,
-                    ttl: 90,
-                    maxTtl: 90
-                });
+                this.world.spawnBattleScar(front.x, front.y, 12 + front.scale * 10, 90);
                 this.world.createBattleDangerZone(front, 'defenders held');
                 this.recordBattleReport(this.createFrontReport(front, defenders, 'defenders held', [], raidSummary));
                 if (front.mode === 'intercolonial') {
@@ -922,13 +920,7 @@
                     || null;
             const damagedBuildings = this.applyBreakthroughDamage(front, target, front.mode === 'intercolonial' ? defenderColony : colony);
             raidSummary = this.resolveInboundRaidOutcome(front, colony, true, damagedBuildings);
-            this.world.battleScars.push({
-                x: front.x,
-                y: front.y,
-                radius: 14 + front.scale * 12,
-                ttl: 120,
-                maxTtl: 120
-            });
+            this.world.spawnBattleScar(front.x, front.y, 14 + front.scale * 12, 120);
             this.world.createBattleDangerZone(front, 'attackers broke through');
             this.recordBattleReport(this.createFrontReport(front, defenders, 'attackers broke through', damagedBuildings, raidSummary));
             if (front.mode === 'intercolonial') {

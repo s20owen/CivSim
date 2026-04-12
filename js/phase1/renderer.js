@@ -85,6 +85,23 @@
             }
         }
     };
+    const ASSET_IMAGE_CACHE = new Map();
+
+    function getCachedImage(src) {
+        let entry = ASSET_IMAGE_CACHE.get(src);
+        if (entry) {
+            return entry;
+        }
+        const image = new Image();
+        const promise = new Promise((resolve, reject) => {
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+        });
+        image.src = src;
+        entry = { image, promise };
+        ASSET_IMAGE_CACHE.set(src, entry);
+        return entry;
+    }
 
     class PhaseOneRenderer {
         constructor(canvas, world) {
@@ -105,11 +122,31 @@
             this.colonistSpriteReady = false;
             this.colonistSpriteState = new Map();
             this.weatherPatternCache = new Map();
+            this.staticTerrainCanvas = null;
+            this.staticTerrainCtx = null;
+            this.staticTerrainSignature = '';
+            this.staticPropCanvas = null;
+            this.staticPropCtx = null;
+            this.staticPropSignature = '';
             this.performanceProfile = this.detectPerformanceProfile();
+            this.pixelRatio = 1;
             this.layerCadenceCache = new Map();
-            this.loadStructureSprite();
-            this.loadFoodStorageSprite();
-            this.loadColonistSprite();
+            this.performanceStats = {
+                fps: 0,
+                frameMs: 0,
+                updateMs: 0,
+                uiMs: 0,
+                renderMs: 0,
+                frameCount: 0,
+                sampleElapsed: 0,
+                visibleColonists: 0,
+                visibleAnimals: 0,
+                visiblePredators: 0,
+                totalStaticResources: 0,
+                memory: null
+            };
+            this.lastPerfSampleAt = performance.now();
+            this.preloadVisualAssets();
             this.resize();
         }
 
@@ -123,60 +160,66 @@
                 mobile,
                 lowPower: mobile,
                 maxPixelRatio: mobile ? 1.25 : 1.75,
+                staticLayerScale: mobile ? 0.5 : 1,
                 weatherDensity: mobile ? 0.62 : 1,
                 nearGroundDensity: mobile ? 0.58 : 1,
                 fogLayers: mobile ? 1 : 2,
                 nearGroundInterval: mobile ? 0.12 : 0,
                 battleOverlayInterval: mobile ? 0.1 : 0,
-                factionEffectInterval: mobile ? 0.14 : 0
+                factionEffectInterval: mobile ? 0.14 : 0,
+                minimalEntityDetailPopulation: mobile ? 18 : 999,
+                simplifiedEntityDetailPopulation: mobile ? 38 : 999,
+                animalStridePopulation: mobile ? 34 : 999,
+                predatorStridePopulation: mobile ? 30 : 999
             };
+        }
+
+        preloadVisualAssets() {
+            this.loadStructureSprite();
+            this.loadFoodStorageSprite();
+            this.loadColonistSprite();
         }
 
         loadStructureSprite() {
-            const sprite = new Image();
-            sprite.onload = () => {
+            const entry = getCachedImage(STRUCTURE_SPRITE_CONFIG.src);
+            entry.promise.then((sprite) => {
                 this.structureSprite = sprite;
                 this.structureSpriteReady = true;
                 this.render();
-            };
-            sprite.onerror = () => {
+            }).catch(() => {
                 this.structureSprite = null;
                 this.structureSpriteReady = false;
-            };
-            sprite.src = STRUCTURE_SPRITE_CONFIG.src;
+            });
         }
 
         loadFoodStorageSprite() {
-            const sprite = new Image();
-            sprite.onload = () => {
+            const entry = getCachedImage(FOOD_STORAGE_SPRITE_CONFIG.src);
+            entry.promise.then((sprite) => {
                 this.foodStorageSprite = sprite;
                 this.foodStorageSpriteReady = true;
                 this.render();
-            };
-            sprite.onerror = () => {
+            }).catch(() => {
                 this.foodStorageSprite = null;
                 this.foodStorageSpriteReady = false;
-            };
-            sprite.src = FOOD_STORAGE_SPRITE_CONFIG.src;
+            });
         }
 
         loadColonistSprite() {
-            const sprite = new Image();
-            sprite.onload = () => {
+            const entry = getCachedImage(COLONIST_SPRITE_CONFIG.src);
+            entry.promise.then((sprite) => {
                 this.colonistSprite = sprite;
                 this.colonistSpriteReady = true;
                 this.render();
-            };
-            sprite.onerror = () => {
+            }).catch(() => {
                 this.colonistSprite = null;
                 this.colonistSpriteReady = false;
-            };
-            sprite.src = COLONIST_SPRITE_CONFIG.src;
+            });
         }
 
         resize() {
             this.performanceProfile = this.detectPerformanceProfile();
             const ratio = Math.min(window.devicePixelRatio || 1, this.performanceProfile.maxPixelRatio);
+            this.pixelRatio = ratio;
             const width = this.canvas.clientWidth;
             const height = this.canvas.clientHeight;
             this.canvas.width = Math.max(1, Math.floor(width * ratio));
@@ -187,6 +230,7 @@
             this.viewportHeight = height;
             this.baseScale = Math.min(width / WORLD_WIDTH, height / WORLD_HEIGHT);
             this.zoom = clamp(this.zoom, this.minZoom, this.maxZoom);
+            this.ensureStaticLayerCanvases();
             this.clampCamera();
         }
 
@@ -574,7 +618,13 @@
         }
 
         render() {
+            const renderStart = performance.now();
             const ctx = this.ctx;
+            this.cleanupColonistSpriteState();
+            this.performanceStats.visibleColonists = 0;
+            this.performanceStats.visibleAnimals = 0;
+            this.performanceStats.visiblePredators = 0;
+            this.performanceStats.totalStaticResources = this.world.resources.filter((resource) => !resource.depleted).length;
             ctx.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
             ctx.fillStyle = BIOME_COLORS.valley || '#5f553f';
             ctx.fillRect(0, 0, this.viewportWidth, this.viewportHeight);
@@ -584,12 +634,13 @@
             const halfHeight = this.viewportHeight / scale / 2;
             ctx.scale(scale, scale);
             ctx.translate(-this.cameraX + halfWidth, -this.cameraY + halfHeight);
-            this.drawTerrain(ctx);
+            this.drawStaticTerrainLayer(ctx);
             this.drawEraBackdrop(ctx);
             this.drawWeatherGroundResponse(ctx);
             this.drawLandUse(ctx);
             this.drawGroundStructures(ctx);
-            this.drawResources(ctx);
+            this.drawStaticPropLayer(ctx);
+            this.drawDynamicResources(ctx);
             this.drawSettlement(ctx);
             this.drawCamp(ctx);
             this.drawColonists(ctx);
@@ -598,6 +649,269 @@
             this.drawWeather(ctx);
             this.drawLighting(ctx);
             ctx.restore();
+            this.performanceStats.renderMs = performance.now() - renderStart;
+            if (this.world.debugFlags?.showPerformance) {
+                this.drawPerformanceOverlay(ctx);
+            }
+        }
+
+        recordFrameMetrics(frameMs, updateMs, uiMs = 0) {
+            this.performanceStats.frameMs = frameMs;
+            this.performanceStats.updateMs = updateMs;
+            this.performanceStats.uiMs = uiMs;
+            this.performanceStats.sampleElapsed += frameMs;
+            this.performanceStats.frameCount += 1;
+            if (this.performanceStats.sampleElapsed >= 500) {
+                this.performanceStats.fps = (this.performanceStats.frameCount * 1000) / Math.max(1, this.performanceStats.sampleElapsed);
+                this.performanceStats.sampleElapsed = 0;
+                this.performanceStats.frameCount = 0;
+                if (performance?.memory) {
+                    this.performanceStats.memory = {
+                        usedJSHeapSize: performance.memory.usedJSHeapSize,
+                        totalJSHeapSize: performance.memory.totalJSHeapSize,
+                        jsHeapSizeLimit: performance.memory.jsHeapSizeLimit
+                    };
+                }
+            }
+        }
+
+        getAssetMemoryEstimate() {
+            const terrainBytes = this.staticTerrainCanvas ? this.staticTerrainCanvas.width * this.staticTerrainCanvas.height * 4 : 0;
+            const propBytes = this.staticPropCanvas ? this.staticPropCanvas.width * this.staticPropCanvas.height * 4 : 0;
+            return {
+                imageCacheEntries: ASSET_IMAGE_CACHE.size,
+                weatherPatternEntries: this.weatherPatternCache.size,
+                spriteStateEntries: this.colonistSpriteState.size,
+                staticLayerBytes: terrainBytes + propBytes
+            };
+        }
+
+        getPerformanceSnapshot() {
+            const pools = {
+                factionEffects: this.world.factionEffectPool?.stats?.() || null,
+                battleBursts: this.world.battleBurstPool?.stats?.() || null,
+                factionParties: this.world.factionPartyPool?.stats?.() || null,
+                battleScars: this.world.battleScarPool?.stats?.() || null
+            };
+            return {
+                fps: Number((this.performanceStats.fps || 0).toFixed(1)),
+                frameMs: Number((this.performanceStats.frameMs || 0).toFixed(2)),
+                updateMs: Number((this.performanceStats.updateMs || 0).toFixed(2)),
+                uiMs: Number((this.performanceStats.uiMs || 0).toFixed(2)),
+                renderMs: Number((this.performanceStats.renderMs || 0).toFixed(2)),
+                population: this.world.colonists.length,
+                entities: {
+                    colonists: this.world.colonists.length,
+                    animals: this.world.animals.filter((entry) => !entry.depleted).length,
+                    predators: this.world.predators.length,
+                    buildings: this.world.buildings.length,
+                    projects: this.world.projects.length,
+                    branchColonies: this.world.getActiveBranchColonies().length,
+                    factionParties: this.world.factionParties.length,
+                    battlefronts: this.world.battlefronts.length
+                },
+                visible: {
+                    colonists: this.performanceStats.visibleColonists,
+                    animals: this.performanceStats.visibleAnimals,
+                    predators: this.performanceStats.visiblePredators,
+                    staticResources: this.performanceStats.totalStaticResources
+                },
+                caches: this.getAssetMemoryEstimate(),
+                pools,
+                updateBreakdown: this.world.performanceTelemetry?.updateBreakdown || {},
+                hottestUpdateSection: this.world.performanceTelemetry?.hottestUpdateSection || null,
+                hottestUpdateMs: Number((this.world.performanceTelemetry?.hottestUpdateMs || 0).toFixed(2)),
+                branchUpdateBreakdown: this.world.performanceTelemetry?.branchUpdateBreakdown || {},
+                hottestBranchSection: this.world.performanceTelemetry?.hottestBranchSection || null,
+                hottestBranchMs: Number((this.world.performanceTelemetry?.hottestBranchMs || 0).toFixed(2)),
+                updateSlices: this.world.performanceTelemetry?.sliceCount || 0,
+                maxUpdateSlices: this.world.performanceTelemetry?.maxSlices || 0,
+                droppedUpdateTime: Number((this.world.performanceTelemetry?.droppedUpdateTime || 0).toFixed(3)),
+                memory: this.performanceStats.memory
+                    ? {
+                        usedMB: Number((this.performanceStats.memory.usedJSHeapSize / (1024 * 1024)).toFixed(1)),
+                        totalMB: Number((this.performanceStats.memory.totalJSHeapSize / (1024 * 1024)).toFixed(1)),
+                        limitMB: Number((this.performanceStats.memory.jsHeapSizeLimit / (1024 * 1024)).toFixed(1))
+                    }
+                    : null
+            };
+        }
+
+        drawPerformanceOverlay(ctx) {
+            const stats = this.getPerformanceSnapshot();
+            const staticLayerMB = stats.caches.staticLayerBytes / (1024 * 1024);
+            const panelWidth = 254;
+            const lineHeight = 13;
+            const paddingX = 8;
+            const paddingY = 8;
+            ctx.save();
+            ctx.setTransform(this.pixelRatio || 1, 0, 0, this.pixelRatio || 1, 0, 0);
+            const lines = [
+                `FPS ${stats.fps}  frame ${stats.frameMs}ms`,
+                `update ${stats.updateMs}ms  ui ${stats.uiMs}ms  render ${stats.renderMs}ms`,
+                `pop ${stats.population}  visC ${stats.visible.colonists}`,
+                `animals ${stats.entities.animals}/${stats.visible.animals}  pred ${stats.entities.predators}/${stats.visible.predators}`,
+                `res ${stats.visible.staticResources}  bld ${stats.entities.buildings}  proj ${stats.entities.projects}`,
+                `img ${stats.caches.imageCacheEntries}  weather ${stats.caches.weatherPatternEntries}  sprite ${stats.caches.spriteStateEntries}`,
+                `static layers ${staticLayerMB.toFixed(1)} MB`,
+                `hot ${stats.hottestUpdateSection || 'n/a'} ${stats.hottestUpdateMs}ms`,
+                `branch ${stats.hottestBranchSection || 'n/a'} ${stats.hottestBranchMs}ms`,
+                `slices ${stats.updateSlices}/${stats.maxUpdateSlices} drop ${stats.droppedUpdateTime}s`,
+                `pool party ${stats.pools.factionParties?.active ?? 0}/${stats.pools.factionParties?.free ?? 0} scar ${stats.pools.battleScars?.active ?? 0}/${stats.pools.battleScars?.free ?? 0}`
+            ];
+            if (stats.memory) {
+                lines.push(`heap ${stats.memory.usedMB}/${stats.memory.totalMB} MB`);
+            }
+            const visibleLines = lines.slice(0, 10);
+            const panelHeight = paddingY * 2 + visibleLines.length * lineHeight + 6;
+            const panelX = Math.max(10, this.viewportWidth - panelWidth - 10);
+            const panelY = Math.max(10, this.viewportHeight - panelHeight - 10);
+            ctx.fillStyle = 'rgba(12, 14, 18, 0.78)';
+            ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
+            ctx.strokeStyle = 'rgba(232, 216, 164, 0.55)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(panelX, panelY, panelWidth, panelHeight);
+            ctx.fillStyle = '#f6efc8';
+            ctx.font = '12px monospace';
+            visibleLines.forEach((line, index) => {
+                ctx.fillText(line, panelX + paddingX, panelY + paddingY + 10 + index * lineHeight);
+            });
+            ctx.restore();
+        }
+
+        cleanupColonistSpriteState() {
+            if (this.colonistSpriteState.size <= this.world.colonists.length + 1) {
+                return;
+            }
+            const liveIds = new Set(this.world.colonists.map((colonist) => colonist.id));
+            for (const colonistId of this.colonistSpriteState.keys()) {
+                if (!liveIds.has(colonistId)) {
+                    this.colonistSpriteState.delete(colonistId);
+                }
+            }
+        }
+
+        ensureStaticLayerCanvases() {
+            if (!this.staticTerrainCanvas) {
+                this.staticTerrainCanvas = this.createStaticLayerCanvas(WORLD_WIDTH, WORLD_HEIGHT);
+                this.staticTerrainCtx = this.staticTerrainCanvas.getContext('2d');
+            }
+            if (!this.staticPropCanvas) {
+                this.staticPropCanvas = this.createStaticLayerCanvas(WORLD_WIDTH, WORLD_HEIGHT);
+                this.staticPropCtx = this.staticPropCanvas.getContext('2d');
+            }
+        }
+
+        buildTerrainSignature() {
+            const season = this.world.getSeason().name;
+            const parts = [season];
+            for (const cell of this.world.cells) {
+                if (!cell) {
+                    continue;
+                }
+                const terrain = cell.terrain || {};
+                parts.push(
+                    `${cell.biome}:${terrain.marsh ? 1 : 0}${terrain.drained ? 1 : 0}${terrain.cleared ? 1 : 0}${terrain.terraced ? 1 : 0}${terrain.irrigation ? 1 : 0}${terrain.fortified ? 1 : 0}${terrain.quarried ? 1 : 0}`
+                );
+            }
+            return parts.join('|');
+        }
+
+        buildStaticPropSignature() {
+            const parts = [];
+            for (const relic of this.world.godMode?.relics || []) {
+                parts.push(`relic:${Math.round(relic.x)}:${Math.round(relic.y)}`);
+            }
+            for (const resource of this.world.resources) {
+                if (resource.depleted) {
+                    continue;
+                }
+                parts.push(`${resource.type}:${Math.round(resource.x)}:${Math.round(resource.y)}:${Math.round(resource.amount || 0)}`);
+            }
+            return parts.join('|');
+        }
+
+        redrawStaticTerrainLayer() {
+            this.ensureStaticLayerCanvases();
+            const scale = this.performanceProfile.staticLayerScale || 1;
+            this.staticTerrainCtx.setTransform(1, 0, 0, 1, 0, 0);
+            this.staticTerrainCtx.clearRect(0, 0, this.staticTerrainCanvas.width, this.staticTerrainCanvas.height);
+            this.staticTerrainCtx.setTransform(scale, 0, 0, scale, 0, 0);
+            for (const cell of this.world.cells) {
+                if (!cell) {
+                    continue;
+                }
+                this.drawTerrainCell(this.staticTerrainCtx, cell, 0, 0);
+            }
+            this.staticTerrainCtx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
+            this.staticTerrainCtx.lineWidth = 1;
+            for (let x = 0; x <= WORLD_WIDTH; x += CELL_WIDTH) {
+                this.staticTerrainCtx.beginPath();
+                this.staticTerrainCtx.moveTo(x, 0);
+                this.staticTerrainCtx.lineTo(x, WORLD_HEIGHT);
+                this.staticTerrainCtx.stroke();
+            }
+            for (let y = 0; y <= WORLD_HEIGHT; y += CELL_HEIGHT) {
+                this.staticTerrainCtx.beginPath();
+                this.staticTerrainCtx.moveTo(0, y);
+                this.staticTerrainCtx.lineTo(WORLD_WIDTH, y);
+                this.staticTerrainCtx.stroke();
+            }
+            this.staticTerrainCtx.setTransform(1, 0, 0, 1, 0, 0);
+        }
+
+        redrawStaticPropLayer() {
+            this.ensureStaticLayerCanvases();
+            const scale = this.performanceProfile.staticLayerScale || 1;
+            this.staticPropCtx.setTransform(1, 0, 0, 1, 0, 0);
+            this.staticPropCtx.clearRect(0, 0, this.staticPropCanvas.width, this.staticPropCanvas.height);
+            this.staticPropCtx.setTransform(scale, 0, 0, scale, 0, 0);
+            this.drawStaticPropsInBounds(this.staticPropCtx, {
+                minX: 0,
+                minY: 0,
+                maxX: WORLD_WIDTH,
+                maxY: WORLD_HEIGHT
+            });
+            this.staticPropCtx.setTransform(1, 0, 0, 1, 0, 0);
+        }
+
+        createChunkCanvas(width, height) {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.ceil(width));
+            canvas.height = Math.max(1, Math.ceil(height));
+            return canvas;
+        }
+
+        createStaticLayerCanvas(width, height) {
+            const scale = this.performanceProfile.staticLayerScale || 1;
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.ceil(width * scale));
+            canvas.height = Math.max(1, Math.ceil(height * scale));
+            return canvas;
+        }
+
+        drawStaticTerrainLayer(ctx) {
+            const signature = this.buildTerrainSignature();
+            if (this.staticTerrainSignature !== signature) {
+                this.redrawStaticTerrainLayer();
+                this.staticTerrainSignature = signature;
+            }
+            const prevSmoothing = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(this.staticTerrainCanvas, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+            ctx.imageSmoothingEnabled = prevSmoothing;
+        }
+
+        drawStaticPropLayer(ctx) {
+            const signature = this.buildStaticPropSignature();
+            if (this.staticPropSignature !== signature) {
+                this.redrawStaticPropLayer();
+                this.staticPropSignature = signature;
+            }
+            const prevSmoothing = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(this.staticPropCanvas, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+            ctx.imageSmoothingEnabled = prevSmoothing;
         }
 
         drawLandUse(ctx) {
@@ -927,140 +1241,127 @@
             ctx.restore();
         }
 
-        drawTerrain(ctx) {
+        drawTerrainCell(ctx, cell, offsetX = 0, offsetY = 0) {
             const season = this.world.getSeason().name;
-            const bounds = this.getViewBounds();
-            this.forEachVisibleCell(bounds, (cell) => {
-                let fill = BIOME_COLORS[cell.biome];
-                const terrain = cell.terrain || {};
-                if (season === 'Winter' && cell.biome !== 'water') {
-                    fill = '#a6b0aa';
-                } else if (season === 'Autumn' && cell.biome === 'forest') {
-                    fill = '#8c6a2f';
-                }
-                ctx.fillStyle = fill;
-                ctx.fillRect(cell.x, cell.y, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+            const terrain = cell.terrain || {};
+            const localX = cell.x - offsetX;
+            const localY = cell.y - offsetY;
+            let fill = BIOME_COLORS[cell.biome];
+            if (season === 'Winter' && cell.biome !== 'water') {
+                fill = '#a6b0aa';
+            } else if (season === 'Autumn' && cell.biome === 'forest') {
+                fill = '#8c6a2f';
+            }
+            ctx.fillStyle = fill;
+            ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
 
-                if (cell.biome === 'forest') {
-                    ctx.fillStyle = 'rgba(28, 59, 25, 0.18)';
-                    for (let i = 0; i < 4; i++) {
-                        ctx.fillRect(cell.x + 8 + i * 10, cell.y + ((i * 11) % 24), 6, 6);
-                    }
-                } else if (cell.biome === 'fertile') {
-                    ctx.fillStyle = 'rgba(188, 201, 94, 0.22)';
-                    ctx.fillRect(cell.x + 10, cell.y + 8, 22, 10);
-                    ctx.fillRect(cell.x + 30, cell.y + 26, 16, 8);
-                } else if (cell.biome === 'rocky') {
-                    ctx.fillStyle = 'rgba(238, 220, 194, 0.14)';
-                    ctx.fillRect(cell.x + 8, cell.y + 8, 12, 7);
-                    ctx.fillRect(cell.x + 32, cell.y + 18, 14, 9);
-                } else if (cell.biome === 'water') {
-                    ctx.fillStyle = '#6f8e45';
-                    ctx.fillRect(cell.x, cell.y, CELL_WIDTH + 1, CELL_HEIGHT + 1);
-                    ctx.fillStyle = 'rgba(88, 142, 182, 0.4)';
-                    const pattern = (cell.col + cell.row) % 3;
-                    if (pattern === 0) {
-                        ctx.fillRect(cell.x + 7, cell.y + 10, CELL_WIDTH - 14, 8);
-                        ctx.fillRect(cell.x + 12, cell.y + 24, CELL_WIDTH - 24, 7);
-                    } else if (pattern === 1) {
-                        ctx.fillRect(cell.x + 10, cell.y + 8, CELL_WIDTH - 20, 9);
-                        ctx.fillRect(cell.x + 5, cell.y + 26, CELL_WIDTH - 14, 6);
-                    } else {
-                        ctx.fillRect(cell.x + 6, cell.y + 14, CELL_WIDTH - 18, 8);
-                        ctx.fillRect(cell.x + 16, cell.y + 28, CELL_WIDTH - 26, 6);
-                    }
-                    ctx.fillStyle = 'rgba(180, 221, 239, 0.16)';
-                    ctx.fillRect(cell.x + 14, cell.y + 11, 10, 2);
-                    ctx.fillRect(cell.x + 24, cell.y + 27, 8, 2);
-                } else if (cell.biome === 'valley') {
-                    ctx.fillStyle = 'rgba(37, 31, 22, 0.16)';
-                    ctx.fillRect(cell.x + 4, cell.y + 4, CELL_WIDTH - 8, CELL_HEIGHT - 8);
-                    ctx.strokeStyle = 'rgba(200, 173, 120, 0.14)';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(cell.x + 6, cell.y + CELL_HEIGHT - 6);
-                    ctx.lineTo(cell.x + CELL_WIDTH * 0.45, cell.y + 8);
-                    ctx.lineTo(cell.x + CELL_WIDTH - 6, cell.y + CELL_HEIGHT - 10);
-                    ctx.stroke();
+            if (cell.biome === 'forest') {
+                ctx.fillStyle = 'rgba(28, 59, 25, 0.18)';
+                for (let i = 0; i < 4; i++) {
+                    ctx.fillRect(localX + 8 + i * 10, localY + ((i * 11) % 24), 6, 6);
                 }
-
-                if (terrain.marsh && !terrain.drained) {
-                    ctx.fillStyle = 'rgba(78, 118, 82, 0.28)';
-                    ctx.fillRect(cell.x + 4, cell.y + 6, CELL_WIDTH - 8, CELL_HEIGHT - 12);
-                    ctx.fillStyle = 'rgba(156, 179, 102, 0.35)';
-                    for (let i = 0; i < 4; i += 1) {
-                        const reedX = cell.x + 8 + i * 9;
-                        ctx.fillRect(reedX, cell.y + 10 + (i % 2) * 8, 2, 10);
-                    }
+            } else if (cell.biome === 'fertile') {
+                ctx.fillStyle = 'rgba(188, 201, 94, 0.22)';
+                ctx.fillRect(localX + 10, localY + 8, 22, 10);
+                ctx.fillRect(localX + 30, localY + 26, 16, 8);
+            } else if (cell.biome === 'rocky') {
+                ctx.fillStyle = 'rgba(238, 220, 194, 0.14)';
+                ctx.fillRect(localX + 8, localY + 8, 12, 7);
+                ctx.fillRect(localX + 32, localY + 18, 14, 9);
+            } else if (cell.biome === 'water') {
+                ctx.fillStyle = '#6f8e45';
+                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+                ctx.fillStyle = 'rgba(88, 142, 182, 0.4)';
+                const pattern = (cell.col + cell.row) % 3;
+                if (pattern === 0) {
+                    ctx.fillRect(localX + 7, localY + 10, CELL_WIDTH - 14, 8);
+                    ctx.fillRect(localX + 12, localY + 24, CELL_WIDTH - 24, 7);
+                } else if (pattern === 1) {
+                    ctx.fillRect(localX + 10, localY + 8, CELL_WIDTH - 20, 9);
+                    ctx.fillRect(localX + 5, localY + 26, CELL_WIDTH - 14, 6);
+                } else {
+                    ctx.fillRect(localX + 6, localY + 14, CELL_WIDTH - 18, 8);
+                    ctx.fillRect(localX + 16, localY + 28, CELL_WIDTH - 26, 6);
                 }
-                if (terrain.cleared) {
-                    ctx.fillStyle = 'rgba(92, 63, 38, 0.42)';
-                    ctx.fillRect(cell.x + 9, cell.y + 13, 6, 5);
-                    ctx.fillRect(cell.x + 24, cell.y + 24, 7, 5);
-                    ctx.fillRect(cell.x + 35, cell.y + 11, 5, 5);
-                }
-                if (terrain.terraced) {
-                    ctx.strokeStyle = 'rgba(214, 202, 152, 0.35)';
-                    ctx.lineWidth = 1.2;
-                    for (let i = 0; i < 3; i += 1) {
-                        const y = cell.y + 9 + i * 12;
-                        ctx.beginPath();
-                        ctx.moveTo(cell.x + 6, y);
-                        ctx.lineTo(cell.x + CELL_WIDTH - 6, y);
-                        ctx.stroke();
-                    }
-                }
-                if (terrain.irrigation) {
-                    ctx.strokeStyle = 'rgba(102, 156, 196, 0.35)';
-                    ctx.lineWidth = 1.4;
-                    ctx.beginPath();
-                    ctx.moveTo(cell.x + 6, cell.y + CELL_HEIGHT * 0.65);
-                    ctx.lineTo(cell.x + CELL_WIDTH - 6, cell.y + CELL_HEIGHT * 0.35);
-                    ctx.stroke();
-                }
-                if (terrain.drained) {
-                    ctx.strokeStyle = 'rgba(177, 157, 112, 0.32)';
-                    ctx.lineWidth = 1.1;
-                    ctx.beginPath();
-                    ctx.moveTo(cell.x + 7, cell.y + 8);
-                    ctx.lineTo(cell.x + CELL_WIDTH - 7, cell.y + CELL_HEIGHT - 8);
-                    ctx.stroke();
-                }
-                if (terrain.fortified) {
-                    ctx.strokeStyle = 'rgba(204, 180, 138, 0.42)';
-                    ctx.lineWidth = 1.5;
-                    ctx.strokeRect(cell.x + 5, cell.y + 5, CELL_WIDTH - 10, CELL_HEIGHT - 10);
-                }
-                if (terrain.quarried) {
-                    ctx.strokeStyle = 'rgba(221, 209, 190, 0.34)';
-                    ctx.lineWidth = 1.2;
-                    ctx.beginPath();
-                    ctx.moveTo(cell.x + 8, cell.y + 10);
-                    ctx.lineTo(cell.x + 18, cell.y + 20);
-                    ctx.lineTo(cell.x + 30, cell.y + 13);
-                    ctx.lineTo(cell.x + 40, cell.y + 26);
-                    ctx.stroke();
-                }
-            });
-
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
-            ctx.lineWidth = 1;
-            for (let x = 0; x <= WORLD_WIDTH; x += CELL_WIDTH) {
+                ctx.fillStyle = 'rgba(180, 221, 239, 0.16)';
+                ctx.fillRect(localX + 14, localY + 11, 10, 2);
+                ctx.fillRect(localX + 24, localY + 27, 8, 2);
+            } else if (cell.biome === 'valley') {
+                ctx.fillStyle = 'rgba(37, 31, 22, 0.16)';
+                ctx.fillRect(localX + 4, localY + 4, CELL_WIDTH - 8, CELL_HEIGHT - 8);
+                ctx.strokeStyle = 'rgba(200, 173, 120, 0.14)';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, WORLD_HEIGHT);
+                ctx.moveTo(localX + 6, localY + CELL_HEIGHT - 6);
+                ctx.lineTo(localX + CELL_WIDTH * 0.45, localY + 8);
+                ctx.lineTo(localX + CELL_WIDTH - 6, localY + CELL_HEIGHT - 10);
                 ctx.stroke();
             }
-            for (let y = 0; y <= WORLD_HEIGHT; y += CELL_HEIGHT) {
+
+            if (terrain.marsh && !terrain.drained) {
+                ctx.fillStyle = 'rgba(78, 118, 82, 0.28)';
+                ctx.fillRect(localX + 4, localY + 6, CELL_WIDTH - 8, CELL_HEIGHT - 12);
+                ctx.fillStyle = 'rgba(156, 179, 102, 0.35)';
+                for (let i = 0; i < 4; i += 1) {
+                    const reedX = localX + 8 + i * 9;
+                    ctx.fillRect(reedX, localY + 10 + (i % 2) * 8, 2, 10);
+                }
+            }
+            if (terrain.cleared) {
+                ctx.fillStyle = 'rgba(92, 63, 38, 0.42)';
+                ctx.fillRect(localX + 9, localY + 13, 6, 5);
+                ctx.fillRect(localX + 24, localY + 24, 7, 5);
+                ctx.fillRect(localX + 35, localY + 11, 5, 5);
+            }
+            if (terrain.terraced) {
+                ctx.strokeStyle = 'rgba(214, 202, 152, 0.35)';
+                ctx.lineWidth = 1.2;
+                for (let i = 0; i < 3; i += 1) {
+                    const y = localY + 9 + i * 12;
+                    ctx.beginPath();
+                    ctx.moveTo(localX + 6, y);
+                    ctx.lineTo(localX + CELL_WIDTH - 6, y);
+                    ctx.stroke();
+                }
+            }
+            if (terrain.irrigation) {
+                ctx.strokeStyle = 'rgba(102, 156, 196, 0.35)';
+                ctx.lineWidth = 1.4;
                 ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(WORLD_WIDTH, y);
+                ctx.moveTo(localX + 6, localY + CELL_HEIGHT * 0.65);
+                ctx.lineTo(localX + CELL_WIDTH - 6, localY + CELL_HEIGHT * 0.35);
+                ctx.stroke();
+            }
+            if (terrain.drained) {
+                ctx.strokeStyle = 'rgba(177, 157, 112, 0.32)';
+                ctx.lineWidth = 1.1;
+                ctx.beginPath();
+                ctx.moveTo(localX + 7, localY + 8);
+                ctx.lineTo(localX + CELL_WIDTH - 7, localY + CELL_HEIGHT - 8);
+                ctx.stroke();
+            }
+            if (terrain.fortified) {
+                ctx.strokeStyle = 'rgba(204, 180, 138, 0.42)';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(localX + 5, localY + 5, CELL_WIDTH - 10, CELL_HEIGHT - 10);
+            }
+            if (terrain.quarried) {
+                ctx.strokeStyle = 'rgba(221, 209, 190, 0.34)';
+                ctx.lineWidth = 1.2;
+                ctx.beginPath();
+                ctx.moveTo(localX + 8, localY + 10);
+                ctx.lineTo(localX + 18, localY + 20);
+                ctx.lineTo(localX + 30, localY + 13);
+                ctx.lineTo(localX + 40, localY + 26);
                 ctx.stroke();
             }
         }
 
-        drawResources(ctx) {
+        drawStaticPropsInBounds(ctx, bounds) {
             for (const relic of this.world.godMode?.relics || []) {
+                if (relic.x < bounds.minX || relic.x >= bounds.maxX || relic.y < bounds.minY || relic.y >= bounds.maxY) {
+                    continue;
+                }
                 ctx.fillStyle = '#f2d37c';
                 ctx.beginPath();
                 ctx.moveTo(relic.x, relic.y - 12);
@@ -1079,6 +1380,9 @@
             }
             for (const resource of this.world.resources) {
                 if (resource.depleted) {
+                    continue;
+                }
+                if (resource.x < bounds.minX || resource.x >= bounds.maxX || resource.y < bounds.minY || resource.y >= bounds.maxY) {
                     continue;
                 }
                 if (resource.type === 'water') {
@@ -1122,39 +1426,74 @@
                 }
             }
 
-            for (const animal of this.world.animals) {
+        }
+
+        drawDynamicResources(ctx) {
+            const bounds = this.getViewBounds();
+            const simplifiedAnimals =
+                this.performanceProfile.lowPower &&
+                this.world.colonists.length >= this.performanceProfile.animalStridePopulation;
+            const simplifiedPredators =
+                this.performanceProfile.lowPower &&
+                this.world.colonists.length >= this.performanceProfile.predatorStridePopulation;
+            const frameBucket = Math.floor((performance.now() || 0) / 180);
+            for (let index = 0; index < this.world.animals.length; index += 1) {
+                const animal = this.world.animals[index];
                 if (animal.depleted) {
                     continue;
                 }
+                if (!this.isPointVisible(bounds, animal.x, animal.y, 18)) {
+                    continue;
+                }
+                const nearCamp = distance(animal, this.world.camp) < 170;
+                const hasPressure = animal.targetId !== null || animal.state === 'fleeing' || animal.state === 'hunted';
+                if (simplifiedAnimals && !nearCamp && !hasPressure && ((index + frameBucket) % 2) === 1) {
+                    continue;
+                }
+                this.performanceStats.visibleAnimals += 1;
                 ctx.fillStyle = '#7f5938';
                 ctx.beginPath();
                 ctx.ellipse(animal.x, animal.y, 10, 7, 0, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.fillRect(animal.x + 5, animal.y - 5, 7, 2);
-                ctx.fillStyle = '#3b2617';
-                ctx.fillRect(animal.x - 6, animal.y + 4, 2, 5);
-                ctx.fillRect(animal.x + 3, animal.y + 4, 2, 5);
+                if (!simplifiedAnimals || nearCamp || hasPressure) {
+                    ctx.fillRect(animal.x + 5, animal.y - 5, 7, 2);
+                    ctx.fillStyle = '#3b2617';
+                    ctx.fillRect(animal.x - 6, animal.y + 4, 2, 5);
+                    ctx.fillRect(animal.x + 3, animal.y + 4, 2, 5);
+                }
             }
 
-            for (const predator of this.world.predators) {
+            for (let index = 0; index < this.world.predators.length; index += 1) {
+                const predator = this.world.predators[index];
+                if (!this.isPointVisible(bounds, predator.x, predator.y, 18)) {
+                    continue;
+                }
+                const nearCamp = distance(predator, this.world.camp) < 220;
+                const activelyThreatening = predator.targetId !== null || predator.state === 'hunting' || predator.state === 'chasing';
+                if (simplifiedPredators && !nearCamp && !activelyThreatening && ((index + frameBucket) % 2) === 1) {
+                    continue;
+                }
+                this.performanceStats.visiblePredators += 1;
                 ctx.fillStyle = '#4f3f2e';
                 ctx.beginPath();
                 ctx.ellipse(predator.x, predator.y, 11, 7, 0, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.fillStyle = '#2d2418';
-                ctx.beginPath();
-                ctx.moveTo(predator.x - 6, predator.y - 5);
-                ctx.lineTo(predator.x - 2, predator.y - 12);
-                ctx.lineTo(predator.x + 1, predator.y - 5);
-                ctx.fill();
-                ctx.beginPath();
-                ctx.moveTo(predator.x + 6, predator.y - 5);
-                ctx.lineTo(predator.x + 2, predator.y - 12);
-                ctx.lineTo(predator.x - 1, predator.y - 5);
-                ctx.fill();
-                ctx.fillStyle = '#d16558';
-                ctx.fillRect(predator.x - 4, predator.y - 1, 2, 2);
-                ctx.fillRect(predator.x + 2, predator.y - 1, 2, 2);
+                if (!simplifiedPredators || nearCamp || activelyThreatening) {
+                    ctx.fillStyle = '#2d2418';
+                    ctx.beginPath();
+                    ctx.moveTo(predator.x - 6, predator.y - 5);
+                    ctx.lineTo(predator.x - 2, predator.y - 12);
+                    ctx.lineTo(predator.x + 1, predator.y - 5);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(predator.x + 6, predator.y - 5);
+                    ctx.lineTo(predator.x + 2, predator.y - 12);
+                    ctx.lineTo(predator.x - 1, predator.y - 5);
+                    ctx.fill();
+                    ctx.fillStyle = '#d16558';
+                    ctx.fillRect(predator.x - 4, predator.y - 1, 2, 2);
+                    ctx.fillRect(predator.x + 2, predator.y - 1, 2, 2);
+                }
             }
         }
 
@@ -1257,6 +1596,7 @@
 
         drawSettlement(ctx) {
             const era = this.world.getCurrentEra ? this.world.getCurrentEra() : 'survival';
+            const bounds = this.getViewBounds();
             const eraTints = {
                 survival: { wood: '#8b6a48', roof: '#6c4c31', trim: '#c8ad79', stone: '#877a6e', field: '#8caf4a' },
                 toolmaking: { wood: '#8d6d4a', roof: '#6a4b30', trim: '#cfb07e', stone: '#8a7d71', field: '#90b451' },
@@ -1270,6 +1610,9 @@
             const palette = eraTints[era] || eraTints.survival;
             for (const colony of this.world.branchColonies || []) {
                 if (!Number.isFinite(colony.x) || !Number.isFinite(colony.y)) {
+                    continue;
+                }
+                if (!this.isCircleVisible(bounds, colony.x, colony.y, 54, 32)) {
                     continue;
                 }
                 const diplomacy = colony.diplomacyState || 'unknown';
@@ -2257,18 +2600,35 @@
         }
 
         drawColonists(ctx) {
+            const bounds = this.getViewBounds();
+            const minimalDetail = this.performanceProfile.lowPower &&
+                this.world.colonists.length >= this.performanceProfile.minimalEntityDetailPopulation &&
+                this.zoom < 1.35;
+            const simplifiedDetail = this.performanceProfile.lowPower &&
+                this.world.colonists.length >= this.performanceProfile.simplifiedEntityDetailPopulation &&
+                this.zoom < 1.7;
             for (const colonist of this.world.colonists) {
+                if (!this.isPointVisible(bounds, colonist.x, colonist.y, colonist.alive ? 20 : 14)) {
+                    continue;
+                }
+                this.performanceStats.visibleColonists += 1;
                 if (!colonist.alive) {
                     this.drawDeadColonist(ctx, colonist);
                     continue;
                 }
-                const drewSprite = this.drawColonistSprite(ctx, colonist);
+                const important = this.world.selectedEntity === colonist || colonist.intent === 'war' || colonist.intent === 'protect';
+                const useFallbackOnly = simplifiedDetail && !important;
+                const drewSprite = !useFallbackOnly && this.drawColonistSprite(ctx, colonist);
                 if (!drewSprite) {
                     this.drawColonistFallback(ctx, colonist);
                 }
-                this.drawColonistGear(ctx, colonist);
-                this.drawColonistBattleState(ctx, colonist);
-                this.drawIntentBubble(ctx, colonist);
+                if (!minimalDetail || important) {
+                    this.drawColonistGear(ctx, colonist);
+                    this.drawColonistBattleState(ctx, colonist);
+                    if (!simplifiedDetail || important) {
+                        this.drawIntentBubble(ctx, colonist);
+                    }
+                }
 
                 if (colonist.intent === 'war') {
                     ctx.strokeStyle = 'rgba(226, 108, 92, 0.9)';
