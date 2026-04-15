@@ -1395,14 +1395,14 @@
             const season = world.getSeason();
             const temperature = world.getTemperatureAt(this.x, this.y);
             const nearCamp = distance(this, world.camp) < 80;
-            const fireComfort = nearCamp && world.camp.fireFuel > 4 ? 1.6 : 0;
+            const fireComfort = nearCamp && world.camp.fireFuel > 4 ? 2.1 : 0;
             const moveDrain = this.state === 'moving' ? 0.35 : 0;
             const sleepRecover = this.state === 'sleeping' ? 5.8 : 0;
 
-            this.stats.hunger = clamp(this.stats.hunger - dt * (0.62 * season.hunger + moveDrain * 0.4), 0, 100);
-            this.stats.thirst = clamp(this.stats.thirst - dt * (0.66 * season.thirst * weather.thirst + moveDrain * 0.32), 0, 100);
+            this.stats.hunger = clamp(this.stats.hunger - dt * (0.5 * season.hunger + moveDrain * 0.26), 0, 100);
+            this.stats.thirst = clamp(this.stats.thirst - dt * (0.54 * season.thirst * weather.thirst + moveDrain * 0.22), 0, 100);
             const enduranceBonus = 1 - this.traits.endurance * 0.18;
-            this.stats.energy = clamp(this.stats.energy - dt * (0.72 + moveDrain * 0.68) * enduranceBonus + dt * sleepRecover, 0, 100);
+            this.stats.energy = clamp(this.stats.energy - dt * (0.56 + moveDrain * 0.42) * enduranceBonus + dt * (sleepRecover + 0.4), 0, 100);
 
             const coldStress = clamp((8 - temperature) / 18, 0, 2.2) * weather.warmth;
             const clothingReduction = this.equipment.clothing ? 0.7 : 1;
@@ -1557,6 +1557,9 @@
                     plan = world.buildWarmPlan(this);
                     break;
                 case 'sleep':
+                    if (this.stats.energy > 64 && this.state !== 'sleeping') {
+                        return false;
+                    }
                     plan = world.buildSleepPlan(this);
                     break;
                 case 'tend':
@@ -1587,14 +1590,16 @@
                     plan = world.buildPlantTrialPlan(this);
                     break;
                 case 'socialize':
+                    if (this.stats.morale > 62 || this.mood.social < 0.12) {
+                        return false;
+                    }
                     plan = world.buildSocialPlan(this);
                     break;
                 case 'build':
                     plan = world.buildConstructionPlan(this);
                     break;
                 case 'rest':
-                    plan = world.buildRestPlan(this);
-                    break;
+                    return false;
                 default:
                     return false;
             }
@@ -1617,7 +1622,7 @@
                 this.lastNeed = option.need;
             }
             this.decisionCooldown = config.lowPriorityLod
-                ? 2.6 + world.rng() * 1.8
+                ? 1.4 + world.rng() * 1.0
                 : 1 + world.rng() * 0.8;
             this.plan = plan;
             this.planStep = 0;
@@ -1894,15 +1899,15 @@
                     key: 'socialize',
                     need: 'society',
                     score: world.buildSocialPlan(this)
-                        ? 10 +
+                        ? 4 +
                             this.traits.sociability * 18 +
                             this.mood.social * 2 -
                             this.mood.conflict * 3 +
-                            this.emotionalMemory.griefLoad * 18 +
+                            this.emotionalMemory.griefLoad * 14 +
                             world.getActionConfidence(this, 'socialize') * 10 +
                             world.getDivineSuggestionBonus('socialize') +
                             world.getCultureIntentBias('socialize') +
-                            (this.stats.morale < 55 ? 8 : 0) +
+                            (this.stats.morale < 55 ? 12 : this.stats.morale < 68 ? 4 : -8) +
                             world.getTraitDecisionBias(this, 'socialize') +
                             world.getEraDecisionBias('socialize')
                         : -1,
@@ -1911,13 +1916,13 @@
                 {
                     key: 'build',
                     need: 'settlement',
-                    score: world.getConstructionScore(this) + world.getCultureIntentBias('build') + world.getDivineSuggestionBonus('build') + world.getActionConfidence(this, 'build') * 10 + world.getTraitDecisionBias(this, 'build') + world.getEraDecisionBias('build'),
+                    score: world.getConstructionScore(this) + 6 + world.getCultureIntentBias('build') + world.getDivineSuggestionBonus('build') + world.getActionConfidence(this, 'build') * 10 + world.getTraitDecisionBias(this, 'build') + world.getEraDecisionBias('build'),
                     builder: () => world.buildConstructionPlan(this)
                 },
                 {
                     key: 'rest',
                     need: 'steady',
-                    score: 6,
+                    score: Math.max(0, 1 + (55 - stats.energy) * 0.18),
                     builder: () => world.buildRestPlan(this)
                 }
             ].sort((a, b) => b.score - a.score);
@@ -2000,6 +2005,40 @@
                 if (distance(this, step) < 12) {
                     this.advancePlan();
                 }
+                return;
+            }
+
+            if (step.action === 'battleEngage') {
+                const battlefront = (step.entity && !step.entity.resolved ? step.entity : null) ||
+                    world.battlefronts.find((front) => front.id === step.battlefrontId && !front.resolved) ||
+                    null;
+                if (!battlefront) {
+                    this.advancePlan();
+                    return;
+                }
+                const combatDestination = world.battleManager.getColonistCombatDestination
+                    ? world.battleManager.getColonistCombatDestination(battlefront, this)
+                    : (step.destination || battlefront);
+                const arrivalRadius = combatDestination?.target ? 16 : 10;
+                if (distance(this, combatDestination) > arrivalRadius) {
+                    this.state = 'moving';
+                    this.path = [];
+                    this.pathIndex = 0;
+                    this.moveToward(combatDestination, dt);
+                    return;
+                }
+                this.state = 'working';
+                this.vx = 0;
+                this.vy = 0;
+                this.actionProgress += dt;
+                if (this.actionProgress < step.duration) {
+                    return;
+                }
+                world.completeIntent(this, {
+                    ...step,
+                    entity: battlefront
+                });
+                this.actionProgress = 0;
                 return;
             }
 
@@ -2114,6 +2153,7 @@
             this.nextColonistId = 0;
             this.nextFamilyId = 1;
             this.nextResourceId = 1;
+            this.nextFactionUnitId = 1;
             this.progress = {
                 completedActions: {},
                 recipeCrafts: {}
@@ -2145,6 +2185,7 @@
             this.factionEvents = [];
             this.lastRaid = null;
             this.factionParties = [];
+            this.factionUnits = [];
             this.factionEffects = [];
             this.battlefronts = [];
             this.battleBursts = [];
@@ -3009,6 +3050,7 @@
                 raidCooldown: Number.isFinite(colony.raidCooldown) ? colony.raidCooldown : 34 + this.rng() * 14,
                 diplomacyCooldown: Number.isFinite(colony.diplomacyCooldown) ? colony.diplomacyCooldown : 10 + this.rng() * 12,
                 supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : this.getColonySupportCooldownDuration(colony, colony.type === 'daughter' ? 18 : 12, colony.type === 'daughter' ? 54 : 40),
+                mainCeasefireCooldown: Math.max(0, Number.isFinite(colony.mainCeasefireCooldown) ? colony.mainCeasefireCooldown : 0),
                 resourceScanCooldown: Number.isFinite(colony.resourceScanCooldown) ? colony.resourceScanCooldown : 0,
                 strategicEvalCooldown: Number.isFinite(colony.strategicEvalCooldown) ? colony.strategicEvalCooldown : 0,
                 foundedDay: colony.foundedDay || this.day,
@@ -3544,6 +3586,128 @@
             return this.battleManager.spawnBattlefront(colony, options);
         }
 
+        createFactionUnit(data = {}) {
+            const unit = {
+                entityType: 'factionUnit',
+                id: data.id || `faction-unit-${this.nextFactionUnitId++}`,
+                colonyId: data.colonyId || 0,
+                colonyName: data.colonyName || 'Unknown Hold',
+                battlefrontId: data.battlefrontId || null,
+                side: data.side || 'attackers',
+                x: Number.isFinite(data.x) ? data.x : this.camp.x,
+                y: Number.isFinite(data.y) ? data.y : this.camp.y,
+                vx: Number.isFinite(data.vx) ? data.vx : 0,
+                vy: Number.isFinite(data.vy) ? data.vy : 0,
+                hp: Math.max(0, Number.isFinite(data.hp) ? data.hp : 4),
+                maxHp: Math.max(0, Number.isFinite(data.maxHp) ? data.maxHp : (Number.isFinite(data.hp) ? data.hp : 4)),
+                speed: Number.isFinite(data.speed) ? data.speed : 18,
+                damage: Number.isFinite(data.damage) ? data.damage : 2,
+                attackCooldown: Number.isFinite(data.attackCooldown) ? data.attackCooldown : 0,
+                targetColonistId: data.targetColonistId || null,
+                alive: data.alive !== false,
+                posture: data.posture || 'advance',
+                formationRow: Number.isFinite(data.formationRow) ? data.formationRow : 0,
+                formationColumn: Number.isFinite(data.formationColumn) ? data.formationColumn : 0,
+                role: data.role || 'frontline'
+            };
+            this.factionUnits.push(unit);
+            return unit;
+        }
+
+        assignColonistToBattlefront(colonist, front, index = 0, role = 'frontline', ttl = 12) {
+            if (!colonist || !front) {
+                return;
+            }
+            colonist.assignedBattlefrontId = front.id;
+            colonist.battleFormationIndex = index;
+            colonist.battleRole = role;
+            colonist.battleOrderTtl = Math.max(colonist.battleOrderTtl || 0, ttl);
+            colonist.intent = 'war';
+            colonist.state = 'moving';
+            colonist.plan = [];
+            colonist.planStep = 0;
+            colonist.path = [];
+            colonist.pathIndex = 0;
+            colonist.actionProgress = 0;
+            colonist.decisionCooldown = 0;
+        }
+
+        getFactionUnitById(id) {
+            return this.factionUnits.find((unit) => unit.id === id) || null;
+        }
+
+        hasActiveOccupationPressurePresence(colonyName) {
+            if (!colonyName) {
+                return false;
+            }
+            const camp = this.camp || { x: 0, y: 0 };
+            const presenceRadius = 240;
+            if ((this.factionUnits || []).some((unit) =>
+                unit.alive &&
+                unit.colonyName === colonyName &&
+                distance(unit, camp) <= presenceRadius
+            )) {
+                return true;
+            }
+            if ((this.battlefronts || []).some((front) =>
+                !front.resolved &&
+                front.colonyName === colonyName &&
+                distance(front, camp) <= presenceRadius + 80
+            )) {
+                return true;
+            }
+            if ((this.factionParties || []).some((party) =>
+                party.alive !== false &&
+                party.colonyName === colonyName &&
+                distance(party, camp) <= presenceRadius
+            )) {
+                return true;
+            }
+            return false;
+        }
+
+        getBattlefrontAttackers(front) {
+            if (!front) {
+                return [];
+            }
+            if (Array.isArray(front.factionUnitIds) && front.factionUnitIds.length > 0) {
+                return front.factionUnitIds
+                    .map((id) => this.getFactionUnitById(id))
+                    .filter((unit) => unit && unit.alive && unit.hp > 0);
+            }
+            return (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
+        }
+
+        getBattlefrontDefenders(front) {
+            if (!front) {
+                return [];
+            }
+            if (Array.isArray(front.defenderFactionUnitIds) && front.defenderFactionUnitIds.length > 0) {
+                return front.defenderFactionUnitIds
+                    .map((id) => this.getFactionUnitById(id))
+                    .filter((unit) => unit && unit.alive && unit.hp > 0);
+            }
+            return (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0);
+        }
+
+        hasActiveBattlefrontForColony(colonyId) {
+            if (!colonyId) {
+                return false;
+            }
+            return this.battlefronts.some((front) =>
+                !front.resolved &&
+                front.ttl > 0 &&
+                (front.colonyId === colonyId || front.defenderColonyId === colonyId)
+            );
+        }
+
+        removeFactionUnitsByBattlefront(frontId) {
+            if (!frontId || !this.factionUnits.length) {
+                return;
+            }
+            this.factionUnits = this.factionUnits.filter((unit) => unit.battlefrontId !== frontId);
+        }
+
         getNearestBattlefront(origin, maxDistance = 170) {
             if (origin && origin.assignedBattlefrontId) {
                 const assigned = this.battlefronts.find((front) => front.id === origin.assignedBattlefrontId && !front.resolved && front.ttl > 0) || null;
@@ -3591,10 +3755,15 @@
                 return [];
             }
             this.battleManager.ensureInboundDefenderAssignments(front, defenders);
-            for (const colonist of defenders) {
-                colonist.intent = 'war';
-                colonist.state = 'moving';
-                colonist.decisionCooldown = 0;
+            for (let index = 0; index < defenders.length; index += 1) {
+                const colonist = defenders[index];
+                this.assignColonistToBattlefront(
+                    colonist,
+                    front,
+                    colonist.battleFormationIndex,
+                    colonist.battleRole || (index < 2 ? 'frontline' : index < 4 ? 'support' : 'reserve'),
+                    10 + front.scale * 8
+                );
             }
             return defenders;
         }
@@ -3661,6 +3830,24 @@
                 front?.detailKeyMoments?.push(`${colonist.name} fell at the line.`);
             } else if (damage > 3.5) {
                 this.pushEvent(`${colonist.name} was wounded in battle.`);
+            }
+        }
+
+        applyFactionUnitHit(unit, damage, front, sourceLabel = 'enemy fighters') {
+            if (!unit?.alive) {
+                return;
+            }
+            unit.hp = Math.max(0, unit.hp - damage);
+            unit.lastBattleHitTtl = 3.5;
+            this.spawnBattleBurst(
+                unit.x + (this.rng() - 0.5) * 10,
+                unit.y + (this.rng() - 0.5) * 10,
+                0.82,
+                'hit'
+            );
+            if (unit.hp <= 0 && unit.alive) {
+                unit.alive = false;
+                front?.detailKeyMoments?.push(`${unit.colonyName || sourceLabel} lost a fighter at the line.`);
             }
         }
 
@@ -3745,6 +3932,79 @@
             return true;
         }
 
+        applyMainSettlementCeasefire(colony, scale = 0.4, options = {}) {
+            if (!colony) {
+                return 0;
+            }
+            const duration = Math.max(
+                colony.mainCeasefireCooldown || 0,
+                70 + scale * 70 + this.rng() * 26 + (options.severe ? 18 : 0)
+            );
+            colony.mainCeasefireCooldown = duration;
+            colony.raidCooldown = Math.max(colony.raidCooldown || 0, duration * 0.7);
+            colony.supportCooldown = Math.max(colony.supportCooldown || 0, 18 + scale * 16);
+            colony.diplomacyCooldown = Math.max(colony.diplomacyCooldown || 0, 20 + scale * 16);
+            colony.strategicEvalCooldown = Math.max(colony.strategicEvalCooldown || 0, 10 + scale * 8);
+            const campaign = colony.campaign || (colony.campaign = {
+                state: 'idle',
+                pressure: 0,
+                duration: 0,
+                target: 'camp',
+                strategy: 'watchful'
+            });
+            campaign.state = 'idle';
+            campaign.pressure = clamp((campaign.pressure || 0) * 0.18, 0, 1);
+            campaign.duration = 0;
+            campaign.strategy = 'watchful';
+            const army = this.ensureBranchArmy(colony);
+            army.recovery = Math.max(army.recovery || 0, 22 + scale * 18);
+            army.morale = clamp(army.morale - (0.08 + scale * 0.08), 0.12, 1);
+            return duration;
+        }
+
+        absorbDefeatedColonySurvivors(colony, scale = 0.4, options = {}) {
+            if (!colony || options.enemy !== 'main settlement') {
+                return 0;
+            }
+            const housing = this.getHousingSatisfaction();
+            const canAbsorb =
+                this.camp.food > 12 &&
+                this.camp.water > 9 &&
+                housing > 0.5 &&
+                this.colonists.length < 80;
+            if (!canAbsorb) {
+                return 0;
+            }
+            const displacedPressure = Math.max(0, scale - 0.34);
+            if (displacedPressure <= 0) {
+                return 0;
+            }
+            const roomFactor = clamp((this.getBuildingCapacity() - this.colonists.length) / 6, 0, 1);
+            const intake = Math.min(
+                2,
+                Math.floor(displacedPressure * 2.4 + roomFactor + this.rng() * 0.6)
+            );
+            if (intake <= 0) {
+                return 0;
+            }
+            for (let i = 0; i < intake; i += 1) {
+                this.addColonist();
+                const newcomer = this.colonists[this.colonists.length - 1];
+                if (newcomer) {
+                    newcomer.stats.morale = clamp(newcomer.stats.morale - (10 + scale * 6), 0, 100);
+                    newcomer.stats.energy = clamp(newcomer.stats.energy - 8, 0, 100);
+                    newcomer.stats.social = clamp(newcomer.stats.social - 10, 0, 100);
+                    newcomer.recentAction = 'joining as refugee survivor';
+                    newcomer.emotionalMemory.griefLoad = clamp((newcomer.emotionalMemory.griefLoad || 0) + 0.18 + scale * 0.12, 0, 1);
+                    newcomer.emotionalMemory.battleTrauma = clamp((newcomer.emotionalMemory.battleTrauma || 0) + 0.12 + scale * 0.1, 0, 1);
+                }
+            }
+            colony.population = Math.max(1, colony.population - intake * 0.85);
+            colony.history.refugees = (colony.history.refugees || 0) + intake;
+            this.recordWarAftermath(`${intake} survivors from ${colony.name} were absorbed into the main settlement after the defeat.`);
+            return intake;
+        }
+
         createRefugeeOffshootFromMainColony(enemyColony, scale = 0.5, targetBuildingType = 'camp') {
             if (this.getActiveBranchColonies().length >= MAX_ACTIVE_BRANCH_COLONIES || this.colonists.length < 5) {
                 return null;
@@ -3821,6 +4081,12 @@
                 colony.factionIdentity.trust = clamp(colony.factionIdentity.trust - 0.06, 0.05, 0.95);
                 colony.borderFriction = clamp((colony.borderFriction || 0) + 0.08 + scale * 0.08, 0, 1);
                 colony.recentAction = 'retreating';
+                if (options.enemy === 'main settlement') {
+                    this.applyMainSettlementCeasefire(colony, scale, {
+                        severe: scale > 0.55
+                    });
+                    this.absorbDefeatedColonySurvivors(colony, scale, options);
+                }
                 if (options.enemy === 'main settlement' && scale > 0.46) {
                     colony.occupation = {
                         state: 'occupiedByMain',
@@ -3843,6 +4109,9 @@
                 colony.factionIdentity.fear = clamp(colony.factionIdentity.fear - 0.04, 0.05, 0.95);
                 colony.factionIdentity.envy = clamp(colony.factionIdentity.envy + 0.05 + scale * 0.05, 0.05, 0.95);
                 colony.recentAction = scale > 0.52 ? 'occupying' : 'looting';
+                if (options.enemy === 'main settlement') {
+                    colony.mainCeasefireCooldown = Math.max(colony.mainCeasefireCooldown || 0, 16 + scale * 10);
+                }
                 if (scale > 0.48) {
                     colony.occupation = {
                         state: 'occupying',
@@ -3895,18 +4164,28 @@
                     }
                 }
                 if (!this.hasProtectColonyBubble() && occupation.pressureTick <= 0) {
+                    const hasVisiblePressure = this.hasActiveOccupationPressurePresence(occupation.by);
                     const targets = this.buildings
                         .filter((building) => ['storage', 'storagePit', 'granary', 'warehouse', 'hut', 'cottage', 'house', 'watchtower', 'wall', 'fortifiedStructure'].includes(building.type))
                         .sort((left, right) => this.getBuildingIntegrityRatio(left) - this.getBuildingIntegrityRatio(right))
                         .slice(0, 1);
-                    for (const target of targets) {
-                        this.applyBuildingDamage(target, 0.45 + occupation.severity * 0.65);
-                        this.startRepairProject(target);
+                    if (hasVisiblePressure) {
+                        for (const target of targets) {
+                            this.applyBuildingDamage(target, 0.45 + occupation.severity * 0.65);
+                            this.startRepairProject(target);
+                        }
+                        if (targets[0]) {
+                            this.recordWarAftermath(`${occupation.by} damaged the ${targets[0].type} while occupation pressure held.`);
+                        }
+                    } else {
+                        for (const colonist of this.colonists) {
+                            if (!colonist.alive) {
+                                continue;
+                            }
+                            colonist.stats.morale = clamp(colonist.stats.morale - (0.06 + occupation.severity * 0.08), 0, 100);
+                        }
                     }
                     occupation.pressureTick = 4.4 + occupation.severity * 2.4;
-                    if (targets[0]) {
-                        this.recordWarAftermath(`${occupation.by} damaged the ${targets[0].type} while occupation pressure held.`);
-                    }
                 }
                 if (occupation.ttl <= 0) {
                     this.recordWarAftermath(`${occupation.by}'s occupation pressure faded and the settlement reclaimed the scarred ground.`);
@@ -5439,6 +5718,7 @@
                 colony.raidCooldown = Math.max(0, (colony.raidCooldown || 0) - dt);
                 colony.diplomacyCooldown = Math.max(0, (colony.diplomacyCooldown || 0) - dt);
                 colony.supportCooldown = Math.max(0, (colony.supportCooldown || 0) - dt);
+                colony.mainCeasefireCooldown = Math.max(0, (colony.mainCeasefireCooldown || 0) - dt);
                 colony.resourceScanCooldown = Math.max(0, (colony.resourceScanCooldown || 0) - dt);
                 colony.strategicEvalCooldown = Math.max(0, (colony.strategicEvalCooldown || 0) - dt);
                 colony.population = clamp(colony.population + dt * 0.002, 2, 8); // colony population
@@ -5664,22 +5944,28 @@
             const committed = offense.attackers
                 .slice(0, Math.max(2, Math.min(battleScale > 0.54 ? 7 : 4, Math.round(2 + battleScale * 5))))
                 .map((colonist, index) => {
-                    colonist.assignedBattlefrontId = `pending-relief-${aggressor.id}`;
-                    colonist.battleFormationIndex = index;
-                    colonist.battleRole = index < 2 ? 'frontline' : index < 4 ? 'support' : 'reserve';
-                    colonist.battleOrderTtl = 36 + battleScale * 18;
-                    colonist.intent = 'war';
-                    colonist.state = 'moving';
+                    this.assignColonistToBattlefront(
+                        colonist,
+                        { id: `pending-relief-${aggressor.id}` },
+                        index,
+                        index < 2 ? 'frontline' : index < 4 ? 'support' : 'reserve',
+                        36 + battleScale * 18
+                    );
                     return colonist;
                 });
             const commanderColonist = committed
                 .slice()
                 .sort((left, right) => (right.skills.combat + right.combatPower * 0.08) - (left.skills.combat + left.combatPower * 0.08))[0] || committed[0];
+            const borrowedSupport = this.getBorrowedBattleSupport(aggressor, {
+                activeColonies,
+                relief: true
+            });
             const front = this.battleManager.launchMainColonyAttack(aggressor, committed, {
                 reportType: battleScale > 0.6 ? 'large battle' : 'skirmish',
                 scale: battleScale,
                 attackerHealth: Math.max(16, offense.power * (1 + battleScale * 0.24)),
                 defenderHealth: Math.max(14, targetDefense * (1 + battleScale * 0.18)),
+                borrowedSupportColonies: borrowedSupport,
                 commander: commanderColonist ? {
                     name: commanderColonist.name,
                     style: commanderColonist.skills.combat > 8 ? 'aggressive' : 'balanced',
@@ -5723,8 +6009,14 @@
                 if ((colony.army?.recovery || 0) > 0 || colony.diplomacyState !== 'rival') {
                     continue;
                 }
+                if ((colony.mainCeasefireCooldown || 0) > 0 || this.hasActiveBattlefrontForColony(colony.id)) {
+                    continue;
+                }
                 const target = this.getIntercolonyTarget(colony, activeColonies, branchByName);
                 if (!target) {
+                    continue;
+                }
+                if ((target.mainCeasefireCooldown || 0) > 0 || this.hasActiveBattlefrontForColony(target.id)) {
                     continue;
                 }
                 const forcedTarget = colony.campaign?.state === 'active' && colony.campaign?.target === target.name;
@@ -6132,6 +6424,51 @@
             return (defense.militia * 1 + defense.huntersPressed * 1.25 + defense.trainedDefenders * 1.8) * stateMultiplier * commanderFactor * (0.86 + army.morale * 0.28);
         }
 
+        getBorrowedBattleSupport(targetColony, options = {}) {
+            const activeColonies = options.activeColonies || this.getActiveBranchColonies();
+            const maxColonies = options.maxColonies || 2;
+            const support = [];
+            for (const colony of activeColonies) {
+                if (support.length >= maxColonies) {
+                    break;
+                }
+                if (!colony || colony.id === targetColony?.id) {
+                    continue;
+                }
+                if (colony.diplomacyState !== 'allied' && colony.type !== 'daughter') {
+                    continue;
+                }
+                if ((colony.supportCooldown || 0) > 0 || (colony.mainCeasefireCooldown || 0) > 0 || this.hasActiveBattlefrontForColony(colony.id)) {
+                    continue;
+                }
+                const army = this.ensureBranchArmy(colony);
+                if ((army.recovery || 0) > 0 || (army.available || 0) < 2) {
+                    continue;
+                }
+                const reinforcement = Math.max(2, Math.min(4, Math.round(army.available * 0.35 + (colony.type === 'daughter' ? 1 : 0))));
+                support.push({
+                    colonyId: colony.id,
+                    colonyName: colony.name,
+                    population: colony.population,
+                    commander: clone(army.commander),
+                    militaryTendency: colony.factionIdentity?.militaryTendency || 0.5,
+                    trust: colony.factionIdentity?.trust || 0.5,
+                    available: reinforcement
+                });
+                army.available = Math.max(0, army.available - reinforcement * 0.35);
+                army.recovery = Math.max(army.recovery || 0, 8 + reinforcement * 1.8);
+                colony.supportCooldown = this.getColonySupportCooldownDuration(colony, 24, colony.type === 'daughter' ? 96 : 72);
+                colony.recentAction = options.relief ? 'lending relief troops' : 'lending troops';
+            }
+            if (support.length > 0) {
+                const joined = support.map((entry) => entry.colonyName).join(', ');
+                this.recordFactionEvent(options.relief
+                    ? `${joined} sent borrowed troops to support the relief march.`
+                    : `${joined} lent troops to the main settlement's war host.`);
+            }
+            return support;
+        }
+
         resolveFactionTrade(colony) {
             const state = colony.diplomacyState || 'unknown';
             if (!['cautious', 'trading', 'allied'].includes(state)) {
@@ -6369,6 +6706,12 @@
             if (colony.diplomacyState !== 'rival') {
                 return;
             }
+            if ((colony.mainCeasefireCooldown || 0) > 0) {
+                return;
+            }
+            if (this.hasActiveBattlefrontForColony(colony.id)) {
+                return;
+            }
             const army = this.ensureBranchArmy(colony);
             if ((army.recovery || 0) > 0 || (army.available || 0) < 1.5) {
                 return;
@@ -6451,6 +6794,7 @@
             const mobileMode = this.getSimulationPerformanceProfile().mobile;
             const activeColonies = branchContext?.activeColonies || this.getActiveBranchColonies();
             const rivals = activeColonies
+                .filter((colony) => (colony.mainCeasefireCooldown || 0) <= 0)
                 .filter((colony) => colony.diplomacyState === 'rival')
                 .sort((left, right) => (
                     (right.borderFriction + (right.campaign?.pressure || 0) + (right.factionIdentity?.envy || 0)) -
@@ -6492,23 +6836,28 @@
             const committed = offense.attackers
                 .slice(0, Math.max(2, Math.min(reportType === 'large battle' ? 7 : 4, Math.round(2 + battleScale * 5))))
                 .map((colonist, index) => {
-                    colonist.assignedBattlefrontId = `pending-main-attack-${target.id}`;
-                    colonist.battleFormationIndex = index;
-                    colonist.battleRole = index < 2 ? 'frontline' : index < 4 ? 'support' : 'reserve';
-                    colonist.battleOrderTtl = 36 + battleScale * 18;
-                    colonist.intent = 'war';
-                    colonist.state = 'moving';
+                    this.assignColonistToBattlefront(
+                        colonist,
+                        { id: `pending-main-attack-${target.id}` },
+                        index,
+                        index < 2 ? 'frontline' : index < 4 ? 'support' : 'reserve',
+                        36 + battleScale * 18
+                    );
                     return colonist;
                 });
             const commanderColonist = committed
                 .slice()
                 .sort((left, right) => (right.skills.combat + right.combatPower * 0.08) - (left.skills.combat + left.combatPower * 0.08))[0] || committed[0];
+            const borrowedSupport = this.getBorrowedBattleSupport(target, {
+                activeColonies
+            });
 
             const front = this.battleManager.launchMainColonyAttack(target, committed, {
                 reportType,
                 scale: battleScale,
                 attackerHealth: Math.max(16, attackPower * (1.05 + battleScale * 0.22)),
                 defenderHealth: Math.max(14, targetDefense * (1 + battleScale * 0.18)),
+                borrowedSupportColonies: borrowedSupport,
                 commander: commanderColonist ? {
                     name: commanderColonist.name,
                     style: commanderColonist.skills.combat > 8 ? 'aggressive' : 'balanced',
@@ -7086,11 +7435,13 @@
                         const battlefront = target.entity;
                         const weaponBonus = colonist.equipment.hunting?.type === 'spear' ? 2.2 : 0;
                         const dealt = colonist.combatPower * 0.24 + colonist.skills.combat * 0.12 + weaponBonus;
-                        this.battleManager.handleColonistEngage(colonist, battlefront, dealt);
-                        colonist.stats.energy = clamp(colonist.stats.energy - 7, 0, 100);
-                        colonist.stats.morale = clamp(colonist.stats.morale + 1.5, 0, 100);
-                        colonist.gainSkill('combat', 0.8);
-                        this.wearTool(colonist, 'attackPredator', 0.8);
+                        const connected = this.battleManager.handleColonistEngage(colonist, battlefront, dealt);
+                        if (connected) {
+                            colonist.stats.energy = clamp(colonist.stats.energy - 7, 0, 100);
+                            colonist.stats.morale = clamp(colonist.stats.morale + 1.5, 0, 100);
+                            colonist.gainSkill('combat', 0.8);
+                            this.wearTool(colonist, 'attackPredator', 0.8);
+                        }
                     }
                     break;
                 default:
@@ -11549,6 +11900,7 @@
                     nextColonistId: this.nextColonistId,
                     nextFamilyId: this.nextFamilyId,
                     nextResourceId: this.nextResourceId,
+                    nextFactionUnitId: this.nextFactionUnitId,
                     progress: clone(this.progress),
                     recentLabor: clone(this.recentLabor),
                     projects: clone(this.projects),
@@ -11569,6 +11921,7 @@
                     factionEvents: clone(this.factionEvents),
                     lastRaid: clone(this.lastRaid || null),
                     factionParties: clone(this.factionParties),
+                    factionUnits: clone(this.factionUnits),
                     factionEffects: clone(this.factionEffects),
                     battlefronts: clone(this.battlefronts),
                     battleBursts: clone(this.battleBursts),
@@ -11641,6 +11994,7 @@
             this.nextColonistId = state.nextColonistId ?? this.nextColonistId;
             this.nextFamilyId = state.nextFamilyId ?? this.nextFamilyId;
             this.nextResourceId = state.nextResourceId ?? this.nextResourceId;
+            this.nextFactionUnitId = state.nextFactionUnitId ?? this.nextFactionUnitId;
             this.progress = clone(state.progress || this.progress);
             this.recentLabor = clone(state.recentLabor || this.recentLabor);
             this.projects = clone(state.projects || []);
@@ -11664,6 +12018,7 @@
             this.factionEvents = clone(state.factionEvents || []);
             this.lastRaid = clone(state.lastRaid || null);
             this.factionParties = clone(state.factionParties || []);
+            this.factionUnits = clone(state.factionUnits || []);
             this.factionEffects = clone(state.factionEffects || []);
             this.battlefronts = clone(state.battlefronts || []);
             this.battleBursts = clone(state.battleBursts || []);
@@ -12509,6 +12864,16 @@
                         y: Math.round(party.y),
                         progress: Number(party.progress.toFixed(2)),
                         strength: Number(party.strength.toFixed(1))
+                    })),
+                    visibleFactionUnits: this.factionUnits.slice(0, 16).map((unit) => ({
+                        colonyName: unit.colonyName,
+                        battlefrontId: unit.battlefrontId,
+                        side: unit.side,
+                        role: unit.role,
+                        x: Math.round(unit.x),
+                        y: Math.round(unit.y),
+                        hp: Number(unit.hp.toFixed(1)),
+                        posture: unit.posture
                     })),
                     visibleFactionEffects: this.factionEffects.slice(0, 12).map((effect) => ({
                         type: effect.type,

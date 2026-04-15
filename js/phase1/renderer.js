@@ -85,6 +85,34 @@
             }
         }
     };
+    const ENEMY_IDLE_SPRITE_CONFIG = {
+        src: 'enemy_combat_idle.png',
+        frameWidth: 64,
+        frameHeight: 64,
+        frameCount: 2,
+        drawWidth: 28,
+        drawHeight: 28,
+        rows: {
+            up: 0,
+            left: 1,
+            down: 2,
+            right: 3
+        }
+    };
+    const ENEMY_COMBAT_SPRITE_CONFIG = {
+        src: 'enemy_combat.png',
+        frameWidth: 64,
+        frameHeight: 64,
+        frameCount: 6,
+        drawWidth: 28,
+        drawHeight: 28,
+        rows: {
+            up: 0,
+            left: 1,
+            down: 2,
+            right: 3
+        }
+    };
     const ASSET_IMAGE_CACHE = new Map();
 
     function getCachedImage(src) {
@@ -120,6 +148,10 @@
             this.foodStorageSpriteReady = false;
             this.colonistSprite = null;
             this.colonistSpriteReady = false;
+            this.enemyIdleSprite = null;
+            this.enemyIdleSpriteReady = false;
+            this.enemyCombatSprite = null;
+            this.enemyCombatSpriteReady = false;
             this.colonistSpriteState = new Map();
             this.weatherPatternCache = new Map();
             this.staticTerrainCanvas = null;
@@ -160,7 +192,7 @@
                 mobile,
                 lowPower: mobile,
                 maxPixelRatio: mobile ? 1.25 : 1.75,
-                staticLayerScale: mobile ? 0.5 : 1,
+                staticLayerScale: mobile ? 0.75 : 1,
                 weatherDensity: mobile ? 0.62 : 1,
                 nearGroundDensity: mobile ? 0.58 : 1,
                 fogLayers: mobile ? 1 : 2,
@@ -168,7 +200,7 @@
                 battleOverlayInterval: mobile ? 0.1 : 0,
                 factionEffectInterval: mobile ? 0.14 : 0,
                 minimalEntityDetailPopulation: mobile ? 18 : 999,
-                simplifiedEntityDetailPopulation: mobile ? 38 : 999,
+                simplifiedEntityDetailPopulation: mobile ? 52 : 999,
                 animalStridePopulation: mobile ? 34 : 999,
                 predatorStridePopulation: mobile ? 30 : 999
             };
@@ -178,6 +210,7 @@
             this.loadStructureSprite();
             this.loadFoodStorageSprite();
             this.loadColonistSprite();
+            this.loadEnemyBattleSprites();
         }
 
         loadStructureSprite() {
@@ -213,6 +246,27 @@
             }).catch(() => {
                 this.colonistSprite = null;
                 this.colonistSpriteReady = false;
+            });
+        }
+
+        loadEnemyBattleSprites() {
+            const idleEntry = getCachedImage(ENEMY_IDLE_SPRITE_CONFIG.src);
+            idleEntry.promise.then((sprite) => {
+                this.enemyIdleSprite = sprite;
+                this.enemyIdleSpriteReady = true;
+                this.render();
+            }).catch(() => {
+                this.enemyIdleSprite = null;
+                this.enemyIdleSpriteReady = false;
+            });
+            const combatEntry = getCachedImage(ENEMY_COMBAT_SPRITE_CONFIG.src);
+            combatEntry.promise.then((sprite) => {
+                this.enemyCombatSprite = sprite;
+                this.enemyCombatSpriteReady = true;
+                this.render();
+            }).catch(() => {
+                this.enemyCombatSprite = null;
+                this.enemyCombatSpriteReady = false;
             });
         }
 
@@ -1739,6 +1793,45 @@
                         ctx.textBaseline = 'alphabetic';
                     }
                 }
+                if (front.formation?.attackerOrigin && front.formation?.defenderAnchor) {
+                    const contact = front.phase === 'engage' && typeof this.world.battleManager?.getContactAnchor === 'function'
+                        ? this.world.battleManager.getContactAnchor(front)
+                        : front.formation.defenderAnchor;
+                    const attackerArrow = this.getBattleOrderArrow(front, 'attackers', contact);
+                    const defenderArrow = this.getBattleOrderArrow(front, 'defenders', contact);
+                    if (attackerArrow) {
+                        this.drawBattleOrderArrow(ctx, attackerArrow, `rgba(238, 195, 146, ${0.65 * alpha})`, alpha, detailedOverlay);
+                    }
+                    if (defenderArrow) {
+                        this.drawBattleOrderArrow(ctx, defenderArrow, `rgba(176, 224, 168, ${0.62 * alpha})`, alpha, detailedOverlay);
+                    }
+                }
+                if (front.phase === 'muster' && front.formation?.attackerOrigin && front.formation?.defenderAnchor) {
+                    ctx.setLineDash([5, 4]);
+                    ctx.strokeStyle = `rgba(238, 214, 178, ${0.65 * alpha})`;
+                    ctx.lineWidth = 1.6;
+                    ctx.beginPath();
+                    ctx.arc(front.formation.attackerOrigin.x, front.formation.attackerOrigin.y, 14 + front.scale * 6, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.strokeStyle = `rgba(170, 219, 162, ${0.6 * alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(front.formation.defenderAnchor.x, front.formation.defenderAnchor.y, 14 + front.scale * 6, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    if (detailedOverlay) {
+                        ctx.fillStyle = `rgba(245, 231, 196, ${0.92 * alpha})`;
+                        ctx.font = 'bold 8px Georgia';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'bottom';
+                        ctx.fillText('Attack Muster', front.formation.attackerOrigin.x, front.formation.attackerOrigin.y - 16);
+                        ctx.fillStyle = `rgba(208, 235, 194, ${0.9 * alpha})`;
+                        ctx.fillText('Defense Muster', front.formation.defenderAnchor.x, front.formation.defenderAnchor.y - 16);
+                        ctx.fillStyle = `rgba(244, 220, 181, ${0.9 * alpha})`;
+                        ctx.fillText(`Muster ${Math.max(0, front.musterTime - front.phaseTime).toFixed(1)}s`, front.x, front.y - radius - 16);
+                        ctx.textAlign = 'start';
+                        ctx.textBaseline = 'alphabetic';
+                    }
+                }
                 ctx.strokeStyle = `rgba(228, 113, 92, ${0.7 * alpha})`;
                 ctx.lineWidth = 2.2;
                 ctx.beginPath();
@@ -1777,13 +1870,19 @@
                 ctx.lineTo(front.x - 5, front.y + 5);
                 ctx.stroke();
 
-                const attackers = (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
+                const attackers = this.world.getBattlefrontAttackers
+                    ? this.world.getBattlefrontAttackers(front)
+                    : (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
                 for (const attacker of attackers) {
-                    this.drawBattleFighter(ctx, attacker.x, attacker.y, '#b6584e', '#f0b5aa', true, attacker.posture === 'engaged');
+                    if (!this.drawFactionUnitSprite(ctx, attacker)) {
+                        this.drawBattleFighter(ctx, attacker.x, attacker.y, '#b6584e', '#f0b5aa', true, attacker.posture === 'engaged');
+                    }
                 }
 
                 const defenders = (front.mode === 'outbound' || front.mode === 'intercolonial')
-                    ? (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0)
+                    ? (this.world.getBattlefrontDefenders
+                        ? this.world.getBattlefrontDefenders(front)
+                        : (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0))
                     : this.world.colonists.filter((colonist) =>
                         colonist.alive &&
                         (colonist.intent === 'war' || colonist.intent === 'protect') &&
@@ -1798,7 +1897,9 @@
                 }
                 for (const defender of defenders) {
                     if (front.mode === 'outbound' || front.mode === 'intercolonial') {
-                        this.drawBattleFighter(ctx, defender.x, defender.y, '#587348', '#d6e5b8', false, defender.posture === 'engaged');
+                        if (!this.drawFactionUnitSprite(ctx, defender)) {
+                            this.drawBattleFighter(ctx, defender.x, defender.y, '#587348', '#d6e5b8', false, defender.posture === 'engaged');
+                        }
                     } else {
                         ctx.strokeStyle = `rgba(121, 204, 118, ${0.4 * alpha})`;
                         ctx.lineWidth = 1.4;
@@ -1828,6 +1929,112 @@
             }
         }
 
+        getBattleOrderArrow(front, side, contactAnchor) {
+            if (!front?.formation || !contactAnchor) {
+                return null;
+            }
+            const formatOrderLabel = (text) => String(text || '')
+                .split(' ')
+                .filter(Boolean)
+                .map((part) => part[0].toUpperCase() + part.slice(1))
+                .join(' ');
+            const state = side === 'attackers' ? front.orderState?.attackers : front.orderState?.defenders;
+            const from = side === 'attackers' ? front.formation.attackerOrigin : front.formation.defenderAnchor;
+            const advance = side === 'attackers'
+                ? front.formation.advanceVector
+                : { x: -front.formation.advanceVector.x, y: -front.formation.advanceVector.y };
+            const fallbackDistance = 18 + front.scale * 14;
+            const pressDistance = 18 + front.scale * 12;
+            const holdDistance = 8 + front.scale * 7;
+            let to = null;
+            let label = null;
+            if (side === 'attackers') {
+                if (state === 'press' || state === 'advance' || state === 'probe') {
+                    const orderDistance = state === 'press' ? pressDistance : state === 'advance' ? 10 + front.scale * 8 : 4 + front.scale * 4;
+                    to = {
+                        x: contactAnchor.x + advance.x * orderDistance,
+                        y: contactAnchor.y + advance.y * orderDistance
+                    };
+                    label = formatOrderLabel(state);
+                } else if (state === 'fallback' || state === 'rout') {
+                    to = {
+                        x: from.x - advance.x * fallbackDistance,
+                        y: from.y - advance.y * fallbackDistance
+                    };
+                    label = formatOrderLabel(state);
+                }
+            } else {
+                if (state === 'screen') {
+                    to = {
+                        x: contactAnchor.x - advance.x * (holdDistance * 0.45),
+                        y: contactAnchor.y - advance.y * (holdDistance * 0.45)
+                    };
+                    label = 'Screen';
+                } else if (state === 'hold') {
+                    to = {
+                        x: from.x + advance.x * holdDistance,
+                        y: from.y + advance.y * holdDistance
+                    };
+                    label = 'Hold';
+                } else if (state === 'fallback' || state === 'rout') {
+                    to = {
+                        x: from.x - advance.x * fallbackDistance,
+                        y: from.y - advance.y * fallbackDistance
+                    };
+                    label = formatOrderLabel(state);
+                } else if (state === 'rally') {
+                    const fallback = typeof this.world.battleManager?.getDefenderFallbackAnchor === 'function'
+                        ? this.world.battleManager.getDefenderFallbackAnchor(front)
+                        : {
+                            x: from.x - advance.x * fallbackDistance,
+                            y: from.y - advance.y * fallbackDistance
+                        };
+                    to = fallback;
+                    label = 'Rally';
+                }
+            }
+            if (!to) {
+                return null;
+            }
+            return { from, to, label };
+        }
+
+        drawBattleOrderArrow(ctx, arrow, color, alpha, showLabel) {
+            if (!arrow?.from || !arrow?.to) {
+                return;
+            }
+            const dx = arrow.to.x - arrow.from.x;
+            const dy = arrow.to.y - arrow.from.y;
+            const length = Math.hypot(dx, dy) || 1;
+            const nx = dx / length;
+            const ny = dy / length;
+            const head = 7;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = 1.8;
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.moveTo(arrow.from.x, arrow.from.y);
+            ctx.lineTo(arrow.to.x, arrow.to.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(arrow.to.x, arrow.to.y);
+            ctx.lineTo(arrow.to.x - nx * head - ny * 3.5, arrow.to.y - ny * head + nx * 3.5);
+            ctx.lineTo(arrow.to.x - nx * head + ny * 3.5, arrow.to.y - ny * head - nx * 3.5);
+            ctx.closePath();
+            ctx.fill();
+            if (showLabel && arrow.label) {
+                ctx.fillStyle = color.replace(/[\d.]+\)\s*$/, `${Math.min(0.92, alpha)})`);
+                ctx.font = 'bold 8px Georgia';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(arrow.label, (arrow.from.x + arrow.to.x) * 0.5, (arrow.from.y + arrow.to.y) * 0.5 - 4);
+            }
+            ctx.restore();
+        }
+
         drawBattleFighter(ctx, x, y, body, head, attacker, engaged = false) {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
             ctx.beginPath();
@@ -1854,6 +2061,54 @@
                 ctx.arc(x, y, 5.4, 0, Math.PI * 2);
                 ctx.stroke();
             }
+        }
+
+        getFactionUnitFacingDirection(unit) {
+            const vx = Number.isFinite(unit?.vx) ? unit.vx : 0;
+            const vy = Number.isFinite(unit?.vy) ? unit.vy : 0;
+            if (Math.abs(vx) > Math.abs(vy) && Math.abs(vx) > 0.15) {
+                return vx < 0 ? 'left' : 'right';
+            }
+            if (Math.abs(vy) > 0.15) {
+                return vy < 0 ? 'up' : 'down';
+            }
+            return unit?.side === 'defenders' ? 'left' : 'right';
+        }
+
+        drawFactionUnitSprite(ctx, unit) {
+            if (!unit || unit.entityType !== 'factionUnit') {
+                return false;
+            }
+            const engaged = unit.posture === 'engaged';
+            const sprite = engaged ? this.enemyCombatSprite : this.enemyIdleSprite;
+            const ready = engaged ? this.enemyCombatSpriteReady : this.enemyIdleSpriteReady;
+            const config = engaged ? ENEMY_COMBAT_SPRITE_CONFIG : ENEMY_IDLE_SPRITE_CONFIG;
+            if (!ready || !sprite) {
+                return false;
+            }
+            const direction = this.getFactionUnitFacingDirection(unit);
+            const row = config.rows[direction];
+            if (!Number.isFinite(row)) {
+                return false;
+            }
+            const cadence = engaged ? 8 : 3;
+            const frameSeed = Math.floor((this.world.elapsed || 0) * cadence);
+            const frameOffset = (unit.formationColumn || 0) + (unit.formationRow || 0) * 2;
+            const frame = ((frameSeed + frameOffset) % config.frameCount + config.frameCount) % config.frameCount;
+            const sx = frame * config.frameWidth;
+            const sy = row * config.frameHeight;
+            ctx.drawImage(
+                sprite,
+                sx,
+                sy,
+                config.frameWidth,
+                config.frameHeight,
+                unit.x - config.drawWidth * 0.5,
+                unit.y - config.drawHeight * 0.72,
+                config.drawWidth,
+                config.drawHeight
+            );
+            return true;
         }
 
         drawFactionParties(ctx) {
@@ -2804,7 +3059,16 @@
         getColonistStationaryAnimation(colonist) {
             const sitIntents = new Set(['sleep', 'warm', 'socialize']);
             const fightIntents = new Set(['war', 'protect']);
-            const isBattleReady = colonist.intent === 'war' ||
+            const currentStep = colonist.plan?.[colonist.planStep] || null;
+            const assignedFront = colonist.assignedBattlefrontId
+                ? (this.world.battlefronts || []).find((front) => front.id === colonist.assignedBattlefrontId && !front.resolved)
+                : null;
+            const activeBattlePhase = !assignedFront || assignedFront.phase === 'engage';
+            const isBattleReady = (colonist.intent === 'war' && activeBattlePhase && (
+                currentStep?.action === 'battleEngage' ||
+                colonist.lastBattleHitTtl > 0 ||
+                (colonist.threat && colonist.threatDistance < 70)
+            )) ||
                 (colonist.intent === 'protect' && (
                     colonist.assignedBattlefrontId ||
                     colonist.battleRole ||

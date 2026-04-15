@@ -84,6 +84,8 @@
                 targetColonyName: options.targetColonyName || null,
                 defenderColonyId: options.defenderColonyId || null,
                 defenderColonyName: options.defenderColonyName || null,
+                factionUnitIds: cloneIds(options.factionUnitIds || []),
+                defenderFactionUnitIds: cloneIds(options.defenderFactionUnitIds || []),
                 createdDay: this.world.day,
                 createdYear: this.world.year,
                 status: options.status || 'warband',
@@ -99,7 +101,11 @@
                 morale: {
                     attackers: 0.6,
                     defenders: 0.6
-                }
+                },
+                phase: 'muster',
+                phaseTime: 0,
+                musterTime: 3.6 + scale * 2.8,
+                commandIssued: false
             };
             front.morale = this.buildFrontMorale(front, colony, options);
             front.orderState = this.buildOrderState(front);
@@ -107,23 +113,28 @@
             if (front.mode === 'outbound' || front.mode === 'intercolonial') {
                 const defendingColony = front.mode === 'intercolonial' ? options.defenderColony || colony : colony;
                 this.populateEnemyDefenders(front, defendingColony, options);
+                if (front.mode === 'outbound') {
+                    this.populateBorrowedSupportAttackers(front, options);
+                }
                 if (!front.targetBuildingType) {
                     const weakest = this.getColonyStructureTarget(defendingColony);
                     front.targetBuildingType = weakest?.key || null;
                 }
-                front.defenderHealth = this.getProxyHealth(front.defenders);
+                front.defenderHealth = this.getProxyHealth(this.getFrontDefenders(front));
                 front.defenderMaxHealth = front.defenderHealth;
-                front.initialDefenderCount = front.defenders.length;
+                front.initialDefenderCount = this.getFrontDefenders(front).length;
                 front.attackerHealth = front.mode === 'outbound'
                     ? this.getMainAttackerHealth(front)
-                    : this.getProxyHealth(front.attackers);
+                    : this.getProxyHealth(this.getFrontAttackers(front));
                 front.attackerMaxHealth = Math.max(front.attackerHealth, 8);
-                front.initialAttackerCount = front.mode === 'outbound' ? front.mainAttackerIds.length : front.attackers.length;
+                front.initialAttackerCount = front.mode === 'outbound'
+                    ? front.mainAttackerIds.length + this.getFrontAttackers(front).length
+                    : this.getFrontAttackers(front).length;
             } else {
                 this.populateAttackers(front, colony, options);
-                front.attackerHealth = this.getProxyHealth(front.attackers);
+                front.attackerHealth = this.getProxyHealth(this.getFrontAttackers(front));
                 front.attackerMaxHealth = front.attackerHealth;
-                front.initialAttackerCount = front.attackers.length;
+                front.initialAttackerCount = this.getFrontAttackers(front).length;
             }
 
             this.world.battlefronts.push(front);
@@ -309,8 +320,12 @@
                     formation.advanceVector.y * depthOffset;
                 const veteranBonus = (colony.army?.veterans || 0) / Math.max(1, unitCount) * 0.22;
                 const hp = attackerHealthBudget / unitCount * (0.8 + this.world.rng() * 0.45 + veteranBonus);
-                front.attackers.push({
+                const unitData = {
                     id: `atk-${++this.combatantCounter}`,
+                    colonyId: colony.id,
+                    colonyName: colony.name,
+                    battlefrontId: front.id,
+                    side: 'attackers',
                     x: startX,
                     y: startY,
                     vx: 0,
@@ -326,7 +341,13 @@
                     formationRow: row,
                     formationColumn: column,
                     role: row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve'
-                });
+                };
+                if (front.mode !== 'outbound') {
+                    const unit = this.world.createFactionUnit(unitData);
+                    front.factionUnitIds.push(unit.id);
+                } else {
+                    front.attackers.push(unitData);
+                }
             }
         }
 
@@ -347,8 +368,12 @@
                     front.formation.advanceVector.y * depthOffset;
                 const veteranBonus = (colony.army?.veterans || 0) / Math.max(1, unitCount) * 0.2;
                 const hp = healthBudget / unitCount * (0.82 + this.world.rng() * 0.38 + veteranBonus);
-                front.defenders.push({
+                const unitData = {
                     id: `def-${++this.combatantCounter}`,
+                    colonyId: colony.id,
+                    colonyName: colony.name,
+                    battlefrontId: front.id,
+                    side: 'defenders',
                     x: startX,
                     y: startY,
                     vx: 0,
@@ -363,7 +388,60 @@
                     formationRow: row,
                     formationColumn: column,
                     role: row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve'
-                });
+                };
+                if (front.mode === 'outbound' || front.mode === 'intercolonial') {
+                    const unit = this.world.createFactionUnit(unitData);
+                    front.defenderFactionUnitIds.push(unit.id);
+                } else {
+                    front.defenders.push(unitData);
+                }
+            }
+        }
+
+        populateBorrowedSupportAttackers(front, options = {}) {
+            const borrowed = Array.isArray(options.borrowedSupportColonies) ? options.borrowedSupportColonies : [];
+            if (!borrowed.length) {
+                return;
+            }
+            let offsetIndex = 0;
+            for (const support of borrowed) {
+                const unitCount = Math.max(1, Math.min(4, Math.round(support.available || 1)));
+                const columns = Math.max(1, Math.ceil(Math.sqrt(unitCount)));
+                for (let i = 0; i < unitCount; i += 1) {
+                    const row = Math.floor(i / columns);
+                    const column = i % columns;
+                    const lateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
+                    const depthOffset = row * (8 + front.scale * 4) + 16 + offsetIndex * 8;
+                    const startX = front.formation.attackerOrigin.x +
+                        front.formation.flankVector.x * lateralOffset -
+                        front.formation.advanceVector.x * depthOffset;
+                    const startY = front.formation.attackerOrigin.y +
+                        front.formation.flankVector.y * lateralOffset -
+                        front.formation.advanceVector.y * depthOffset;
+                    const commander = support.commander || { aggression: 0.5, discipline: 0.5 };
+                    const hp = 3 + front.scale * 1.1 + this.world.rng() * 1;
+                    const unit = this.world.createFactionUnit({
+                        id: `ally-atk-${++this.combatantCounter}`,
+                        colonyId: support.colonyId,
+                        colonyName: support.colonyName,
+                        battlefrontId: front.id,
+                        side: 'attackers',
+                        x: startX,
+                        y: startY,
+                        hp,
+                        maxHp: hp,
+                        speed: 16 + this.world.rng() * 6 + (commander.discipline || 0.5) * 2,
+                        damage: 1.8 + front.scale * 1.2 + this.world.rng() * 0.8 + (commander.aggression || 0.5) * 0.45,
+                        attackCooldown: this.world.rng() * 0.6,
+                        alive: true,
+                        posture: 'advance',
+                        formationRow: row + 2 + offsetIndex,
+                        formationColumn: column,
+                        role: row === 0 ? 'support' : 'reserve'
+                    });
+                    front.factionUnitIds.push(unit.id);
+                }
+                offsetIndex += 1;
             }
         }
 
@@ -371,6 +449,50 @@
             return {
                 x: front.formation.defenderAnchor.x + front.formation.advanceVector.x * (16 + front.scale * 12),
                 y: front.formation.defenderAnchor.y + front.formation.advanceVector.y * (16 + front.scale * 12)
+            };
+        }
+
+        getContactAnchor(front) {
+            const distanceFromDefenderAnchor = 7 + front.scale * 5;
+            return {
+                x: front.formation.defenderAnchor.x - front.formation.advanceVector.x * distanceFromDefenderAnchor,
+                y: front.formation.defenderAnchor.y - front.formation.advanceVector.y * distanceFromDefenderAnchor
+            };
+        }
+
+        getDefenderFormationDestination(front, unit) {
+            const activeDefenders = Math.max(2, front.initialDefenderCount || this.getFrontDefenders(front).length || 2);
+            const columns = Math.max(2, Math.ceil(Math.sqrt(activeDefenders)));
+            const engageTightness = front.phase === 'engage' ? 0.62 : 1;
+            const lateralOffset = (unit.formationColumn - (columns - 1) * 0.5) * (8 + front.scale * 4) * engageTightness;
+            const depthOffset = unit.formationRow * (8 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1);
+            const fallbackAnchor = this.getDefenderFallbackAnchor(front);
+            let anchor = front.formation.defenderAnchor;
+            let rolePush = depthOffset;
+            if (front.phase === 'engage' && !['fallback', 'rally'].includes(front.orderState.defenders)) {
+                anchor = this.getContactAnchor(front);
+            }
+            if (front.orderState.defenders === 'fallback') {
+                anchor = fallbackAnchor;
+                rolePush = depthOffset + 8;
+            } else if (front.orderState.defenders === 'rally') {
+                anchor = {
+                    x: fallbackAnchor.x - front.formation.advanceVector.x * (6 + front.scale * 5),
+                    y: fallbackAnchor.y - front.formation.advanceVector.y * (6 + front.scale * 5)
+                };
+                rolePush = depthOffset + (unit.role === 'reserve' ? 10 : 4);
+            } else if (front.orderState.defenders === 'screen') {
+                anchor = {
+                    x: front.formation.defenderAnchor.x - front.formation.advanceVector.x * (10 + front.scale * 8),
+                    y: front.formation.defenderAnchor.y - front.formation.advanceVector.y * (10 + front.scale * 8)
+                };
+                rolePush = depthOffset - (unit.role === 'frontline' ? 4 : 0);
+            } else if (front.orderState.defenders === 'hold') {
+                rolePush = depthOffset + (unit.role === 'reserve' ? 6 : 0);
+            }
+            return {
+                x: anchor.x + front.formation.flankVector.x * lateralOffset + front.formation.advanceVector.x * rolePush,
+                y: anchor.y + front.formation.flankVector.y * lateralOffset + front.formation.advanceVector.y * rolePush
             };
         }
 
@@ -409,6 +531,24 @@
             return units.reduce((sum, attacker) => sum + Math.max(0, attacker.hp || 0), 0);
         }
 
+        getFrontAttackers(front) {
+            if (Array.isArray(front.factionUnitIds) && front.factionUnitIds.length > 0) {
+                return front.factionUnitIds
+                    .map((id) => this.world.getFactionUnitById(id))
+                    .filter((unit) => unit && unit.alive && unit.hp > 0);
+            }
+            return (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
+        }
+
+        getFrontDefenders(front) {
+            if ((front.mode === 'outbound' || front.mode === 'intercolonial') && Array.isArray(front.defenderFactionUnitIds) && front.defenderFactionUnitIds.length > 0) {
+                return front.defenderFactionUnitIds
+                    .map((id) => this.world.getFactionUnitById(id))
+                    .filter((unit) => unit && unit.alive && unit.hp > 0);
+            }
+            return (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0);
+        }
+
         getAssignedColonists(front) {
             return this.world.colonists.filter((colonist) =>
                 colonist.alive &&
@@ -417,7 +557,30 @@
         }
 
         getMainAttackerHealth(front) {
-            return this.getAssignedColonists(front).reduce((sum, colonist) => sum + Math.max(0, colonist.stats.health), 0);
+            const colonistHealth = this.getAssignedColonists(front).reduce((sum, colonist) => sum + Math.max(0, colonist.stats.health), 0);
+            const supportHealth = this.getFrontAttackers(front).reduce((sum, unit) => sum + Math.max(0, unit.hp || 0), 0);
+            return colonistHealth + supportHealth;
+        }
+
+        getAssignedColonistFormationDestination(front, colonist) {
+            const columns = Math.max(2, Math.ceil(Math.sqrt(Math.max(2, front.mainAttackerIds.length || this.getAssignedColonists(front).length || 2))));
+            const index = Math.max(0, colonist.battleFormationIndex);
+            const row = Math.floor(index / columns);
+            const column = index % columns;
+            const engageTightness = front.phase === 'engage' ? 0.68 : 1;
+            const lateralOffset = (column - (columns - 1) * 0.5) * (10 + front.scale * 5) * engageTightness;
+            const depthOffset = row * (10 + front.scale * 4) * (front.phase === 'engage' ? 0.75 : 1);
+            const anchor = front.phase === 'engage'
+                ? this.getContactAnchor(front)
+                : front.formation.attackerOrigin;
+            return {
+                x: anchor.x +
+                    front.formation.flankVector.x * lateralOffset +
+                    front.formation.advanceVector.x * depthOffset,
+                y: anchor.y +
+                    front.formation.flankVector.y * lateralOffset +
+                    front.formation.advanceVector.y * depthOffset
+            };
         }
 
         getBattleDestinationForColonist(front, colonist) {
@@ -439,19 +602,35 @@
                     y: anchor.y + front.formation.flankVector.y * lateralOffset + front.formation.advanceVector.y * rolePush
                 };
             }
-            const columns = Math.max(2, Math.ceil(Math.sqrt(Math.max(2, front.mainAttackerIds.length))));
-            const row = Math.floor(index / columns);
-            const column = index % columns;
-            const lateralOffset = (column - (columns - 1) * 0.5) * (10 + front.scale * 5);
-            const depthOffset = row * (10 + front.scale * 4);
-            return {
-                x: front.formation.attackerOrigin.x +
-                    front.formation.flankVector.x * lateralOffset +
-                    front.formation.advanceVector.x * depthOffset,
-                y: front.formation.attackerOrigin.y +
-                    front.formation.flankVector.y * lateralOffset +
-                    front.formation.advanceVector.y * depthOffset
-            };
+            return this.getAssignedColonistFormationDestination(front, colonist);
+        }
+
+        getColonistCombatTarget(front, colonist) {
+            if (!front || front.resolved) {
+                return null;
+            }
+            const enemyPool = front.mode === 'outbound'
+                ? this.getFrontDefenders(front)
+                : this.getFrontAttackers(front);
+            const living = enemyPool
+                .filter((unit) => unit.alive && unit.hp > 0)
+                .sort((left, right) => distance(colonist, left) - distance(colonist, right));
+            return living[0] || null;
+        }
+
+        getColonistCombatDestination(front, colonist) {
+            if (front?.phase !== 'engage') {
+                return this.getBattleDestinationForColonist(front, colonist);
+            }
+            const target = this.getColonistCombatTarget(front, colonist);
+            if (target) {
+                return {
+                    x: target.x,
+                    y: target.y,
+                    target
+                };
+            }
+            return this.getBattleDestinationForColonist(front, colonist);
         }
 
         update(dt) {
@@ -486,8 +665,11 @@
                 front.damageFlash = Math.max(0, front.damageFlash - dt);
                 front.surpriseWindow = Math.max(0, front.surpriseWindow - dt);
                 this.updateOrderState(front);
+                this.syncFactionUnitOrders(front);
+                this.ensureFrontPhase(front, defenders, dt);
 
-                for (const attacker of front.attackers) {
+                const attackers = this.getFrontAttackers(front);
+                for (const attacker of attackers) {
                     if (!attacker.alive || attacker.hp <= 0) {
                         attacker.alive = false;
                         continue;
@@ -496,8 +678,8 @@
                     this.updateAttacker(front, attacker, defenders, dt);
                 }
 
-                const livingAttackers = front.attackers.filter((attacker) => attacker.alive && attacker.hp > 0);
-                front.attackerHealth = this.getProxyHealth(front.attackers);
+                const livingAttackers = attackers.filter((attacker) => attacker.alive && attacker.hp > 0);
+                front.attackerHealth = this.getProxyHealth(attackers);
                 front.attackerMaxHealth = Math.max(front.attackerMaxHealth, front.attackerHealth);
 
                 const defenderStrength = defenders.reduce((sum, colonist) => {
@@ -540,24 +722,36 @@
 
         updateOutboundFront(front, dt, completed) {
             const attackers = this.getAssignedColonists(front);
-            front.initialAttackerCount = Math.max(front.initialAttackerCount || 0, attackers.length);
+            const defenders = this.getFrontDefenders(front);
+            const supportAttackers = this.getFrontAttackers(front);
+            const combinedAttackers = attackers.concat(supportAttackers);
+            front.initialAttackerCount = Math.max(front.initialAttackerCount || 0, combinedAttackers.length);
             front.damageFlash = Math.max(0, front.damageFlash - dt);
             this.updateOrderState(front);
-
-            for (const defender of front.defenders) {
+            this.syncFactionUnitOrders(front);
+            this.ensureFrontPhase(front, defenders, dt);
+            for (const defender of defenders) {
                 if (!defender.alive || defender.hp <= 0) {
                     defender.alive = false;
                     continue;
                 }
                 defender.attackCooldown = Math.max(0, defender.attackCooldown - dt);
-                this.updateProxyCombatant(front, defender, attackers, dt, 'defender');
+                this.updateProxyCombatant(front, defender, combinedAttackers, dt, 'defender');
+            }
+            for (const attacker of supportAttackers) {
+                if (!attacker.alive || attacker.hp <= 0) {
+                    attacker.alive = false;
+                    continue;
+                }
+                attacker.attackCooldown = Math.max(0, attacker.attackCooldown - dt);
+                this.updateProxyCombatant(front, attacker, defenders, dt, 'attacker');
             }
 
             front.attackerHealth = this.getMainAttackerHealth(front);
             front.attackerMaxHealth = Math.max(front.attackerMaxHealth, front.attackerHealth);
-            front.defenderHealth = this.getProxyHealth(front.defenders);
+            front.defenderHealth = this.getProxyHealth(defenders);
             front.defenderMaxHealth = Math.max(front.defenderMaxHealth, front.defenderHealth);
-            front.noDefenderTime = front.defenders.filter((entry) => entry.alive && entry.hp > 0).length > 0 ? 0 : front.noDefenderTime + dt;
+            front.noDefenderTime = defenders.length > 0 ? 0 : front.noDefenderTime + dt;
             front.ttl = Math.max(0, front.ttl - dt);
 
             if (front.defenderHealth <= 0 || front.noDefenderTime > 1.8 || front.orderState.defenders === 'rout') {
@@ -565,7 +759,7 @@
                 completed.push(front);
                 return;
             }
-            if (front.attackerHealth <= 0 || attackers.length === 0 || front.ttl <= 0 || front.orderState.attackers === 'rout') {
+            if (front.attackerHealth <= 0 || combinedAttackers.length === 0 || front.ttl <= 0 || front.orderState.attackers === 'rout') {
                 this.resolveFront(front, 'defenders', attackers);
                 completed.push(front);
             }
@@ -575,37 +769,40 @@
             front.damageFlash = Math.max(0, front.damageFlash - dt);
             front.ttl = Math.max(0, front.ttl - dt);
             this.updateOrderState(front);
-
-            for (const attacker of front.attackers) {
+            this.syncFactionUnitOrders(front);
+            const attackers = this.getFrontAttackers(front);
+            const defenders = this.getFrontDefenders(front);
+            this.ensureFrontPhase(front, defenders, dt);
+            for (const attacker of attackers) {
                 if (!attacker.alive || attacker.hp <= 0) {
                     attacker.alive = false;
                     continue;
                 }
                 attacker.attackCooldown = Math.max(0, attacker.attackCooldown - dt);
-                this.updateProxyCombatant(front, attacker, front.defenders, dt, 'attacker');
+                this.updateProxyCombatant(front, attacker, defenders, dt, 'attacker');
             }
-            for (const defender of front.defenders) {
+            for (const defender of defenders) {
                 if (!defender.alive || defender.hp <= 0) {
                     defender.alive = false;
                     continue;
                 }
                 defender.attackCooldown = Math.max(0, defender.attackCooldown - dt);
-                this.updateProxyCombatant(front, defender, front.attackers, dt, 'defender');
+                this.updateProxyCombatant(front, defender, attackers, dt, 'defender');
             }
 
-            front.attackerHealth = this.getProxyHealth(front.attackers);
+            front.attackerHealth = this.getProxyHealth(attackers);
             front.attackerMaxHealth = Math.max(front.attackerMaxHealth, front.attackerHealth);
-            front.defenderHealth = this.getProxyHealth(front.defenders);
+            front.defenderHealth = this.getProxyHealth(defenders);
             front.defenderMaxHealth = Math.max(front.defenderMaxHealth, front.defenderHealth);
-            front.noDefenderTime = front.defenders.filter((entry) => entry.alive && entry.hp > 0).length > 0 ? 0 : front.noDefenderTime + dt;
+            front.noDefenderTime = defenders.filter((entry) => entry.alive && entry.hp > 0).length > 0 ? 0 : front.noDefenderTime + dt;
 
             if (front.defenderHealth <= 0 || front.noDefenderTime > 1.8 || front.orderState.defenders === 'rout') {
-                this.resolveFront(front, 'attackers', front.defenders);
+                this.resolveFront(front, 'attackers', defenders);
                 completed.push(front);
                 return;
             }
-            if (front.attackerHealth <= 0 || front.attackers.filter((entry) => entry.alive && entry.hp > 0).length === 0 || front.ttl <= 0 || front.orderState.attackers === 'rout') {
-                this.resolveFront(front, 'defenders', front.defenders);
+            if (front.attackerHealth <= 0 || attackers.filter((entry) => entry.alive && entry.hp > 0).length === 0 || front.ttl <= 0 || front.orderState.attackers === 'rout') {
+                this.resolveFront(front, 'defenders', defenders);
                 completed.push(front);
             }
         }
@@ -652,8 +849,10 @@
         }
 
         updateAttacker(front, attacker, defenders, dt) {
-            const target = this.pickAttackerTarget(front, attacker, defenders);
-            const destination = target || this.getAttackerFormationDestination(front, attacker);
+            const target = front.phase === 'engage'
+                ? this.pickAttackerTarget(front, attacker, defenders)
+                : null;
+            const destination = target || attacker.commandTarget || this.getAttackerOrderDestination(front, attacker);
             const dx = destination.x - attacker.x;
             const dy = destination.y - attacker.y;
             const len = Math.hypot(dx, dy) || 1;
@@ -669,7 +868,13 @@
             attacker.vy = (dy / len) * speed;
             attacker.x += attacker.vx * dt;
             attacker.y += attacker.vy * dt;
-            attacker.posture = target ? 'engaged' : distance(attacker, destination) < 10 ? 'holding' : 'advance';
+            attacker.posture = target
+                ? 'engaged'
+                : front.orderState.attackers === 'fallback'
+                    ? 'fallback'
+                    : distance(attacker, destination) < 10
+                        ? 'holding'
+                        : 'advance';
 
             if (target && distance(attacker, target) < 13 && attacker.attackCooldown <= 0) {
                 const tacticBonus = front.tactics.attacker === 'wedge' && attacker.role === 'frontline'
@@ -689,7 +894,7 @@
                 return;
             }
 
-            if (!target && front.targetBuildingId && this.world.rng() < dt * 1.8) {
+            if (front.phase === 'engage' && !target && front.targetBuildingId && this.world.rng() < dt * 1.8) {
                 const building = this.world.buildings.find((entry) => entry.id === front.targetBuildingId) || null;
                 if (building && distance(attacker, building) < 18) {
                     building.integrity = clamp(building.integrity - (0.1 + front.scale * 0.14), 0, building.maxIntegrity);
@@ -704,11 +909,13 @@
         }
 
         updateProxyCombatant(front, unit, targets, dt, side) {
-            const target = this.pickClosestColonist(unit, targets, 24 + front.scale * 18);
+            const target = front.phase === 'engage'
+                ? this.pickClosestColonist(unit, targets, 24 + front.scale * 18)
+                : null;
             const fallback = side === 'defender'
-                ? front.formation.defenderAnchor
-                : front.formation.attackerOrigin;
-            const destination = target || fallback;
+                ? this.getDefenderFormationDestination(front, unit)
+                : this.getAttackerOrderDestination(front, unit);
+            const destination = target || unit.commandTarget || fallback;
             const dx = destination.x - unit.x;
             const dy = destination.y - unit.y;
             const len = Math.hypot(dx, dy) || 1;
@@ -721,6 +928,19 @@
             unit.posture = target ? 'engaged' : retreating ? 'fallback' : 'advance';
             if (target && distance(unit, target) < 13 && unit.attackCooldown <= 0) {
                 const damage = unit.damage * (0.92 + this.world.rng() * 0.3);
+                if (target.entityType === 'factionUnit') {
+                    this.world.applyFactionUnitHit(target, damage, front, side === 'defender' ? front.colonyName : 'enemy fighters');
+                    unit.attackCooldown = 0.48 + this.world.rng() * 0.26;
+                    front.damageFlash = 0.86;
+                    if (!target.alive) {
+                        if (side === 'defender') {
+                            front.attackerCasualties += 1;
+                        } else {
+                            front.defenderCasualties += 1;
+                        }
+                    }
+                    return;
+                }
                 if (front.mode === 'intercolonial') {
                     target.hp = Math.max(0, target.hp - damage);
                     unit.attackCooldown = 0.48 + this.world.rng() * 0.26;
@@ -763,9 +983,10 @@
 
         getAttackerFormationDestination(front, attacker) {
             const { defenderAnchor, flankVector, advanceVector } = front.formation;
-            const columns = Math.max(2, Math.ceil(Math.sqrt(front.initialAttackerCount || front.attackers.length || 4)));
-            const centerOffset = (attacker.formationColumn - (columns - 1) * 0.5) * (7 + front.scale * 4);
-            const rowOffset = attacker.formationRow * (7 + front.scale * 3);
+            const columns = Math.max(2, Math.ceil(Math.sqrt(front.initialAttackerCount || this.getFrontAttackers(front).length || 4)));
+            const engageTightness = front.phase === 'engage' ? 0.62 : 1;
+            const centerOffset = (attacker.formationColumn - (columns - 1) * 0.5) * (7 + front.scale * 4) * engageTightness;
+            const rowOffset = attacker.formationRow * (7 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1);
             let tacticOffset = centerOffset;
             if (front.tactics.attacker === 'flank' && attacker.role !== 'frontline') {
                 tacticOffset *= 1.65;
@@ -773,15 +994,107 @@
             if (front.tactics.attacker === 'wedge') {
                 tacticOffset *= 0.72 + attacker.formationRow * 0.14;
             }
+            const anchor = front.phase === 'engage' ? this.getContactAnchor(front) : defenderAnchor;
             return {
-                x: defenderAnchor.x + flankVector.x * tacticOffset - advanceVector.x * rowOffset,
-                y: defenderAnchor.y + flankVector.y * tacticOffset - advanceVector.y * rowOffset
+                x: anchor.x + flankVector.x * tacticOffset - advanceVector.x * rowOffset,
+                y: anchor.y + flankVector.y * tacticOffset - advanceVector.y * rowOffset
             };
+        }
+
+        getAttackerOrderDestination(front, attacker) {
+            const base = this.getAttackerFormationDestination(front, attacker);
+            if (front.orderState.attackers === 'fallback' || front.orderState.attackers === 'rout') {
+                return {
+                    x: front.formation.attackerOrigin.x -
+                        front.formation.advanceVector.x * (14 + front.scale * 12 + attacker.formationRow * 4) +
+                        front.formation.flankVector.x * ((attacker.formationColumn - 1.5) * (8 + front.scale * 4)),
+                    y: front.formation.attackerOrigin.y -
+                        front.formation.advanceVector.y * (14 + front.scale * 12 + attacker.formationRow * 4) +
+                        front.formation.flankVector.y * ((attacker.formationColumn - 1.5) * (8 + front.scale * 4))
+                };
+            }
+            if (front.orderState.attackers === 'probe') {
+                return {
+                    x: base.x - front.formation.advanceVector.x * (10 + front.scale * 8 + (attacker.role === 'reserve' ? 10 : 0)),
+                    y: base.y - front.formation.advanceVector.y * (10 + front.scale * 8 + (attacker.role === 'reserve' ? 10 : 0))
+                };
+            }
+            if (front.orderState.attackers === 'advance') {
+                return {
+                    x: base.x - front.formation.advanceVector.x * (attacker.role === 'reserve' ? 8 : 3),
+                    y: base.y - front.formation.advanceVector.y * (attacker.role === 'reserve' ? 8 : 3)
+                };
+            }
+            if (front.orderState.attackers === 'press') {
+                return {
+                    x: base.x + front.formation.advanceVector.x * (attacker.role === 'frontline' ? 8 + front.scale * 5 : attacker.role === 'support' ? 4 : 0),
+                    y: base.y + front.formation.advanceVector.y * (attacker.role === 'frontline' ? 8 + front.scale * 5 : attacker.role === 'support' ? 4 : 0)
+                };
+            }
+            return base;
+        }
+
+        syncFactionUnitOrders(front) {
+            for (const attacker of this.getFrontAttackers(front)) {
+                attacker.commandOrder = front.orderState.attackers;
+                attacker.commandTarget = this.getAttackerOrderDestination(front, attacker);
+            }
+            for (const defender of this.getFrontDefenders(front)) {
+                defender.commandOrder = front.orderState.defenders;
+                defender.commandTarget = this.getDefenderFormationDestination(front, defender);
+            }
+        }
+
+        isFrontReadyToEngage(front, defenders) {
+            const attackerUnits = this.getFrontAttackers(front);
+            const assignedAttackers = this.getAssignedColonists(front);
+            const totalAttackers = front.mode === 'outbound'
+                ? assignedAttackers.length + attackerUnits.length
+                : attackerUnits.length;
+            const formedAttackers = front.mode === 'outbound'
+                ? assignedAttackers.filter((colonist) =>
+                    distance(colonist, this.getAssignedColonistFormationDestination(front, colonist)) < 18
+                ).length + attackerUnits.filter((unit) =>
+                    unit.commandTarget && distance(unit, unit.commandTarget) < 16
+                ).length
+                : attackerUnits.filter((unit) => unit.commandTarget && distance(unit, unit.commandTarget) < 16).length;
+            const totalDefenders = front.mode === 'outbound' || front.mode === 'intercolonial'
+                ? this.getFrontDefenders(front).length
+                : defenders.length;
+            const formedDefenders = front.mode === 'outbound' || front.mode === 'intercolonial'
+                ? this.getFrontDefenders(front).filter((unit) => unit.commandTarget && distance(unit, unit.commandTarget) < 16).length
+                : defenders.filter((colonist) => distance(colonist, this.getBattleDestinationForColonist(front, colonist)) < 18).length;
+            const attackerReady = totalAttackers === 0 ? false : formedAttackers / Math.max(1, totalAttackers) >= 0.72;
+            const defenderReady = totalDefenders === 0 ? false : formedDefenders / Math.max(1, totalDefenders) >= 0.72;
+            return attackerReady && (defenderReady || front.surpriseTriggered);
+        }
+
+        ensureFrontPhase(front, defenders, dt) {
+            if (front.phase === 'engage') {
+                return;
+            }
+            front.phaseTime += dt;
+            if (!front.commandIssued) {
+                this.noteFrontMoment(
+                    front,
+                    `${front.commanders.attackers.name} ordered ${titleCase(front.tactics.attacker)} while ${front.commanders.defenders.name} formed ${titleCase(front.tactics.defender)}.`
+                );
+                front.commandIssued = true;
+            }
+            if (this.isFrontReadyToEngage(front, defenders)) {
+                front.phase = 'engage';
+                front.phaseTime = 0;
+                this.noteFrontMoment(front, 'Both lines formed and the battle was joined.');
+            } else if (front.surpriseTriggered && front.phaseTime >= front.musterTime * 0.6) {
+                front.phase = 'engage';
+                front.phaseTime = 0;
+                this.noteFrontMoment(front, 'The line broke early under surprise pressure.');
+            }
         }
 
         pickAttackerTarget(front, attacker, defenders) {
             let best = null;
-            let bestDistance = 26;
+            let bestDistance = 18 + front.scale * 8;
             for (const colonist of defenders) {
                 const currentDistance = distance(attacker, colonist);
                 if (currentDistance < bestDistance) {
@@ -811,17 +1124,12 @@
             if (!front || front.resolved) {
                 return false;
             }
-            const candidates = front.attackers
-                .filter((attacker) => attacker.alive && attacker.hp > 0)
-                .sort((left, right) => distance(colonist, left) - distance(colonist, right));
-            const enemyPool = front.mode === 'outbound'
-                ? front.defenders
-                : front.attackers;
-            const filtered = enemyPool
-                .filter((attacker) => attacker.alive && attacker.hp > 0)
-                .sort((left, right) => distance(colonist, left) - distance(colonist, right));
-            const target = filtered[0] || null;
+            const target = this.getColonistCombatTarget(front, colonist);
             if (!target) {
+                return false;
+            }
+            const targetDistance = distance(colonist, target);
+            if (targetDistance > 16) {
                 return false;
             }
 
@@ -850,7 +1158,7 @@
             if (front.mode === 'outbound') {
                 front.defenderHealth = this.getProxyHealth(front.defenders);
             } else {
-                front.attackerHealth = this.getProxyHealth(front.attackers);
+                front.attackerHealth = this.getProxyHealth(this.getFrontAttackers(front));
             }
             return true;
         }
@@ -1020,6 +1328,7 @@
         }
 
         clearBattleOrders(front) {
+            this.world.removeFactionUnitsByBattlefront(front.id);
             for (const colonist of this.world.colonists) {
                 if (colonist.assignedBattlefrontId === front.id) {
                     colonist.assignedBattlefrontId = null;
@@ -1028,6 +1337,8 @@
                     colonist.battleOrderTtl = 0;
                 }
             }
+            front.factionUnitIds = [];
+            front.defenderFactionUnitIds = [];
         }
 
         applyArmyOutcome(front, colony, outcome, defenderColony = null) {
@@ -1140,7 +1451,7 @@
 
         createFrontReport(front, defenders, outcome, damagedBuildings = [], raidSummary = null) {
             const defenderCount = Math.max(front.initialDefenderCount || 0, defenders.length);
-            const escapedAttackers = front.attackers.filter((attacker) => attacker.alive && attacker.hp > 0).length;
+            const escapedAttackers = this.getFrontAttackers(front).length;
             const outboundAttackers = front.mode === 'outbound' ? this.getAssignedColonists(front).filter((entry) => entry.alive).length : escapedAttackers;
             const reportType = front.reportType || 'battle';
             const meta = front.mode === 'intercolonial'
@@ -1157,7 +1468,7 @@
                 `Attacker losses: ${front.attackerCasualties}`,
                 `Defender losses: ${front.defenderCasualties}`,
                 `Attackers remaining: ${front.mode === 'outbound' ? outboundAttackers : escapedAttackers}`,
-                `Defenders remaining: ${front.mode === 'outbound' ? front.defenders.filter((entry) => entry.alive && entry.hp > 0).length : defenders.filter((entry) => entry.alive).length}`
+                `Defenders remaining: ${front.mode === 'outbound' ? this.getFrontDefenders(front).length : defenders.filter((entry) => entry.alive).length}`
             ];
             if (front.surpriseTriggered) {
                 detailLines.push('The attack landed before the defenders fully formed up.');
