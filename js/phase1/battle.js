@@ -105,6 +105,8 @@
                 phase: 'muster',
                 phaseTime: 0,
                 musterTime: 3.6 + scale * 2.8,
+                engageTime: 0,
+                lineHoldTime: 1.8 + scale * 1.4,
                 commandIssued: false
             };
             front.morale = this.buildFrontMorale(front, colony, options);
@@ -179,7 +181,7 @@
 
         buildApproachGeometry(target, options = {}) {
             const camp = this.world.camp;
-            const source = options.colonySource || (options.mode === 'outbound' ? camp : camp);
+            const source = options.colonySource || camp;
             const towardTarget = normalizeVector(target.x - source.x, target.y - source.y);
             const tacticBias = options.scale || 0.35;
             const depth = 70 + tacticBias * 58;
@@ -188,8 +190,17 @@
             const stageY = target.y - towardTarget.y * depth;
             const lineX = target.x - towardTarget.x * (26 + tacticBias * 18);
             const lineY = target.y - towardTarget.y * (26 + tacticBias * 18);
+            const defenderMusterDepth = 28 + tacticBias * 24;
             return {
                 attackerOrigin: { x: stageX, y: stageY },
+                defenderOrigin: {
+                    x: lineX + towardTarget.x * defenderMusterDepth,
+                    y: lineY + towardTarget.y * defenderMusterDepth
+                },
+                attackerSpawnOrigin: {
+                    x: stageX - towardTarget.x * (18 + tacticBias * 16),
+                    y: stageY - towardTarget.y * (18 + tacticBias * 16)
+                },
                 defenderAnchor: { x: lineX, y: lineY },
                 advanceVector: { x: towardTarget.x, y: towardTarget.y },
                 flankVector: { x: -towardTarget.y, y: towardTarget.x },
@@ -287,7 +298,72 @@
             } else if ((defense.trainedDefenders || 0) >= 2 && (military < 0.45 || defenderCommander.style === 'aggressive')) {
                 defender = 'counter';
             }
-            return { attacker, defender };
+            const attackerFormation = scale > 0.7 && commander.discipline > 0.58
+                ? 'stacked-lines'
+                : attacker === 'wedge'
+                    ? 'vanguard-wedge'
+                    : attacker === 'flank'
+                        ? 'encircle'
+                        : commander.caution > 0.62
+                            ? 'screen-line'
+                            : 'line';
+            const defenderFormation = defender === 'shield'
+                ? 'stacked-lines'
+                : defender === 'screen'
+                    ? 'screen-line'
+                    : defender === 'counter'
+                        ? 'checker'
+                        : defenderCommander.caution > 0.7
+                            ? 'crescent'
+                            : 'line';
+            return { attacker, defender, attackerFormation, defenderFormation };
+        }
+
+        getFormationOffsets(formationType, role, row, column, columns, lateralOffset, depthOffset) {
+            let lateral = lateralOffset;
+            let depth = depthOffset;
+            switch (formationType) {
+                case 'vanguard-wedge':
+                    lateral *= 0.58 + row * 0.22;
+                    depth += Math.abs(column - (columns - 1) * 0.5) * 2.2;
+                    break;
+                case 'encircle':
+                    lateral *= role === 'frontline' ? 1.18 : 1.72;
+                    depth += role === 'support' ? 3 : role === 'reserve' ? 7 : 0;
+                    break;
+                case 'stacked-lines':
+                    lateral *= 0.86;
+                    depth += row * 3.8;
+                    break;
+                case 'screen-line':
+                    lateral *= 1.24;
+                    depth -= role === 'frontline' ? 3.2 : 0;
+                    break;
+                case 'crescent':
+                    depth += Math.abs(column - (columns - 1) * 0.5) * 1.8;
+                    lateral *= 1.08;
+                    break;
+                case 'checker':
+                    lateral += (row % 2 === 0 ? -1 : 1) * 3.6;
+                    depth += (column % 2 === 0 ? 0 : 2.6);
+                    break;
+                default:
+                    break;
+            }
+            return { lateral, depth };
+        }
+
+        getFormationMatchupModifier(front, side, role = 'frontline') {
+            const attackerFormation = front.tactics?.attackerFormation || 'line';
+            const defenderFormation = front.tactics?.defenderFormation || 'line';
+            const pairs = {
+                'vanguard-wedge:stacked-lines': side === 'attackers' && role === 'frontline' ? 1.08 : 0.96,
+                'encircle:screen-line': side === 'attackers' && role !== 'frontline' ? 1.1 : 0.95,
+                'stacked-lines:checker': side === 'defenders' ? 1.08 : 0.96,
+                'screen-line:vanguard-wedge': side === 'defenders' && role === 'frontline' ? 1.08 : 0.96,
+                'crescent:encircle': side === 'defenders' ? 1.06 : 0.97
+            };
+            return pairs[`${attackerFormation}:${defenderFormation}`] || 1;
         }
 
         populateAttackers(front, colony, options) {
@@ -305,17 +381,28 @@
             for (let i = 0; i < unitCount; i += 1) {
                 const row = Math.floor(i / columns);
                 const column = i % columns;
-                const lateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
-                const depthOffset = row * (8 + front.scale * 4);
+                const baseLateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
+                const baseDepthOffset = row * (8 + front.scale * 4);
+                const role = row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve';
+                const { lateral: lateralOffset, depth: depthOffset } = this.getFormationOffsets(
+                    front.tactics.attackerFormation,
+                    role,
+                    row,
+                    column,
+                    columns,
+                    baseLateralOffset,
+                    baseDepthOffset
+                );
                 const tacticOffset = front.tactics.attacker === 'flank'
                     ? lateralOffset * (1.45 + row * 0.08)
                     : front.tactics.attacker === 'wedge'
                         ? lateralOffset * (0.65 + row * 0.18)
                         : lateralOffset;
-                const startX = formation.attackerOrigin.x +
+                const spawnOrigin = formation.attackerSpawnOrigin || formation.attackerOrigin;
+                const startX = spawnOrigin.x +
                     formation.flankVector.x * tacticOffset -
                     formation.advanceVector.x * depthOffset;
-                const startY = formation.attackerOrigin.y +
+                const startY = spawnOrigin.y +
                     formation.flankVector.y * tacticOffset -
                     formation.advanceVector.y * depthOffset;
                 const veteranBonus = (colony.army?.veterans || 0) / Math.max(1, unitCount) * 0.22;
@@ -340,7 +427,7 @@
                     posture: 'advance',
                     formationRow: row,
                     formationColumn: column,
-                    role: row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve'
+                    role
                 };
                 if (front.mode !== 'outbound') {
                     const unit = this.world.createFactionUnit(unitData);
@@ -358,12 +445,26 @@
             for (let i = 0; i < unitCount; i += 1) {
                 const row = Math.floor(i / columns);
                 const column = i % columns;
-                const lateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
-                const depthOffset = row * (8 + front.scale * 4);
-                const startX = front.formation.defenderAnchor.x +
+                const baseLateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
+                const baseDepthOffset = row * (8 + front.scale * 4);
+                const role = row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve';
+                const { lateral: lateralOffset, depth: depthOffset } = this.getFormationOffsets(
+                    front.tactics.defenderFormation,
+                    role,
+                    row,
+                    column,
+                    columns,
+                    baseLateralOffset,
+                    baseDepthOffset
+                );
+                const defenderSpawn = {
+                    x: Number.isFinite(colony?.x) ? colony.x : front.formation.defenderOrigin.x,
+                    y: Number.isFinite(colony?.y) ? colony.y : front.formation.defenderOrigin.y
+                };
+                const startX = defenderSpawn.x +
                     front.formation.flankVector.x * lateralOffset +
                     front.formation.advanceVector.x * depthOffset;
-                const startY = front.formation.defenderAnchor.y +
+                const startY = defenderSpawn.y +
                     front.formation.flankVector.y * lateralOffset +
                     front.formation.advanceVector.y * depthOffset;
                 const veteranBonus = (colony.army?.veterans || 0) / Math.max(1, unitCount) * 0.2;
@@ -387,7 +488,7 @@
                     posture: 'holding',
                     formationRow: row,
                     formationColumn: column,
-                    role: row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve'
+                    role
                 };
                 if (front.mode === 'outbound' || front.mode === 'intercolonial') {
                     const unit = this.world.createFactionUnit(unitData);
@@ -412,10 +513,11 @@
                     const column = i % columns;
                     const lateralOffset = (column - (columns - 1) * 0.5) * (8 + front.scale * 4);
                     const depthOffset = row * (8 + front.scale * 4) + 16 + offsetIndex * 8;
-                    const startX = front.formation.attackerOrigin.x +
+                    const spawnOrigin = front.formation.attackerSpawnOrigin || front.formation.attackerOrigin;
+                    const startX = spawnOrigin.x +
                         front.formation.flankVector.x * lateralOffset -
                         front.formation.advanceVector.x * depthOffset;
-                    const startY = front.formation.attackerOrigin.y +
+                    const startY = spawnOrigin.y +
                         front.formation.flankVector.y * lateralOffset -
                         front.formation.advanceVector.y * depthOffset;
                     const commander = support.commander || { aggression: 0.5, discipline: 0.5 };
@@ -464,10 +566,23 @@
             const activeDefenders = Math.max(2, front.initialDefenderCount || this.getFrontDefenders(front).length || 2);
             const columns = Math.max(2, Math.ceil(Math.sqrt(activeDefenders)));
             const engageTightness = front.phase === 'engage' ? 0.62 : 1;
-            const lateralOffset = (unit.formationColumn - (columns - 1) * 0.5) * (8 + front.scale * 4) * engageTightness;
-            const depthOffset = unit.formationRow * (8 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1);
+            const baseLateralOffset = (unit.formationColumn - (columns - 1) * 0.5) * (8 + front.scale * 4) * engageTightness;
+            const baseDepthOffset = unit.formationRow * (8 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1);
+            const formationOffset = this.getFormationOffsets(
+                front.tactics.defenderFormation,
+                unit.role || 'frontline',
+                unit.formationRow || 0,
+                unit.formationColumn || 0,
+                columns,
+                baseLateralOffset,
+                baseDepthOffset
+            );
+            const lateralOffset = formationOffset.lateral;
+            const depthOffset = formationOffset.depth;
             const fallbackAnchor = this.getDefenderFallbackAnchor(front);
-            let anchor = front.formation.defenderAnchor;
+            let anchor = front.phase === 'muster'
+                ? (front.formation.defenderOrigin || front.formation.defenderAnchor)
+                : front.formation.defenderAnchor;
             let rolePush = depthOffset;
             if (front.phase === 'engage' && !['fallback', 'rally'].includes(front.orderState.defenders)) {
                 anchor = this.getContactAnchor(front);
@@ -568,8 +683,18 @@
             const row = Math.floor(index / columns);
             const column = index % columns;
             const engageTightness = front.phase === 'engage' ? 0.68 : 1;
-            const lateralOffset = (column - (columns - 1) * 0.5) * (10 + front.scale * 5) * engageTightness;
-            const depthOffset = row * (10 + front.scale * 4) * (front.phase === 'engage' ? 0.75 : 1);
+            const role = colonist.battleRole || (row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve');
+            const formationOffset = this.getFormationOffsets(
+                front.tactics.attackerFormation,
+                role,
+                row,
+                column,
+                columns,
+                (column - (columns - 1) * 0.5) * (10 + front.scale * 5) * engageTightness,
+                row * (10 + front.scale * 4) * (front.phase === 'engage' ? 0.75 : 1)
+            );
+            const lateralOffset = formationOffset.lateral;
+            const depthOffset = formationOffset.depth;
             const anchor = front.phase === 'engage'
                 ? this.getContactAnchor(front)
                 : front.formation.attackerOrigin;
@@ -590,12 +715,25 @@
                 const columns = Math.max(2, Math.ceil(Math.sqrt(activeDefenders)));
                 const row = Math.floor(index / columns);
                 const column = index % columns;
-                const lateralOffset = (column - (columns - 1) * 0.5) * (10 + front.scale * 5);
-                const depthOffset = row * (9 + front.scale * 4);
+                const role = colonist.battleRole || (row === 0 ? 'frontline' : row === 1 ? 'support' : 'reserve');
+                const formationOffset = this.getFormationOffsets(
+                    front.tactics.defenderFormation,
+                    role,
+                    row,
+                    column,
+                    columns,
+                    (column - (columns - 1) * 0.5) * (10 + front.scale * 5),
+                    row * (9 + front.scale * 4)
+                );
+                const lateralOffset = formationOffset.lateral;
+                const depthOffset = formationOffset.depth;
                 const fallbackAnchor = this.getDefenderFallbackAnchor(front);
-                const anchor = front.orderState.defenders === 'fallback' || front.orderState.defenders === 'rally'
-                    ? fallbackAnchor
+                let anchor = front.phase === 'muster'
+                    ? (front.formation.defenderOrigin || front.formation.defenderAnchor)
                     : front.formation.defenderAnchor;
+                if (front.orderState.defenders === 'fallback' || front.orderState.defenders === 'rally') {
+                    anchor = fallbackAnchor;
+                }
                 const rolePush = colonist.battleRole === 'reserve' ? depthOffset + 8 : depthOffset;
                 return {
                     x: anchor.x + front.formation.flankVector.x * lateralOffset + front.formation.advanceVector.x * rolePush,
@@ -613,6 +751,7 @@
                 ? this.getFrontDefenders(front)
                 : this.getFrontAttackers(front);
             const living = enemyPool
+                .filter((unit) => this.canBreakFormationForTarget(front, colonist, unit))
                 .filter((unit) => unit.alive && unit.hp > 0)
                 .sort((left, right) => distance(colonist, left) - distance(colonist, right));
             return living[0] || null;
@@ -631,6 +770,23 @@
                 };
             }
             return this.getBattleDestinationForColonist(front, colonist);
+        }
+
+        isHoldingOpeningLine(front) {
+            return front?.phase === 'engage' && (front.engageTime || 0) < (front.lineHoldTime || 0);
+        }
+
+        getContactHoldRadius(front) {
+            return 18 + front.scale * 10;
+        }
+
+        canBreakFormationForTarget(front, actor, target) {
+            if (!front || !actor || !target || !this.isHoldingOpeningLine(front)) {
+                return true;
+            }
+            const contact = this.getContactAnchor(front);
+            const leash = this.getContactHoldRadius(front);
+            return distance(target, contact) <= leash && distance(actor, contact) <= leash + 8;
         }
 
         update(dt) {
@@ -667,6 +823,9 @@
                 this.updateOrderState(front);
                 this.syncFactionUnitOrders(front);
                 this.ensureFrontPhase(front, defenders, dt);
+                if (front.phase === 'engage') {
+                    front.engageTime = Math.max(0, (front.engageTime || 0) + dt);
+                }
 
                 const attackers = this.getFrontAttackers(front);
                 for (const attacker of attackers) {
@@ -730,6 +889,9 @@
             this.updateOrderState(front);
             this.syncFactionUnitOrders(front);
             this.ensureFrontPhase(front, defenders, dt);
+            if (front.phase === 'engage') {
+                front.engageTime = Math.max(0, (front.engageTime || 0) + dt);
+            }
             for (const defender of defenders) {
                 if (!defender.alive || defender.hp <= 0) {
                     defender.alive = false;
@@ -773,6 +935,9 @@
             const attackers = this.getFrontAttackers(front);
             const defenders = this.getFrontDefenders(front);
             this.ensureFrontPhase(front, defenders, dt);
+            if (front.phase === 'engage') {
+                front.engageTime = Math.max(0, (front.engageTime || 0) + dt);
+            }
             for (const attacker of attackers) {
                 if (!attacker.alive || attacker.hp <= 0) {
                     attacker.alive = false;
@@ -845,6 +1010,7 @@
                     modifier *= 1.08;
                 }
             }
+            modifier *= this.getFormationMatchupModifier(front, 'defenders', colonist.battleRole || 'frontline');
             return modifier;
         }
 
@@ -882,7 +1048,8 @@
                     : front.tactics.attacker === 'flank' && attacker.role !== 'frontline'
                         ? 1.12
                         : 1;
-                const damage = attacker.damage * tacticBonus * (0.9 + this.world.rng() * 0.35);
+                const formationBonus = this.getFormationMatchupModifier(front, 'attackers', attacker.role || 'frontline');
+                const damage = attacker.damage * tacticBonus * formationBonus * (0.9 + this.world.rng() * 0.35);
                 const wasAlive = target.alive;
                 this.world.applyBattleHit(target, damage, front, front.colonyName);
                 front.damageFlash = 0.9;
@@ -910,7 +1077,7 @@
 
         updateProxyCombatant(front, unit, targets, dt, side) {
             const target = front.phase === 'engage'
-                ? this.pickClosestColonist(unit, targets, 24 + front.scale * 18)
+                ? this.pickClosestColonist(front, unit, targets, 24 + front.scale * 18)
                 : null;
             const fallback = side === 'defender'
                 ? this.getDefenderFormationDestination(front, unit)
@@ -927,7 +1094,8 @@
             unit.y += unit.vy * dt;
             unit.posture = target ? 'engaged' : retreating ? 'fallback' : 'advance';
             if (target && distance(unit, target) < 13 && unit.attackCooldown <= 0) {
-                const damage = unit.damage * (0.92 + this.world.rng() * 0.3);
+                const formationBonus = this.getFormationMatchupModifier(front, side === 'attacker' ? 'attackers' : 'defenders', unit.role || 'frontline');
+                const damage = unit.damage * formationBonus * (0.92 + this.world.rng() * 0.3);
                 if (target.entityType === 'factionUnit') {
                     this.world.applyFactionUnitHit(target, damage, front, side === 'defender' ? front.colonyName : 'enemy fighters');
                     unit.attackCooldown = 0.48 + this.world.rng() * 0.26;
@@ -968,10 +1136,13 @@
             }
         }
 
-        pickClosestColonist(origin, colonists, maxDistance) {
+        pickClosestColonist(front, origin, colonists, maxDistance) {
             let best = null;
             let bestDistance = maxDistance;
             for (const colonist of colonists) {
+                if (!this.canBreakFormationForTarget(front, origin, colonist)) {
+                    continue;
+                }
                 const current = distance(origin, colonist);
                 if (current < bestDistance) {
                     bestDistance = current;
@@ -985,9 +1156,17 @@
             const { defenderAnchor, flankVector, advanceVector } = front.formation;
             const columns = Math.max(2, Math.ceil(Math.sqrt(front.initialAttackerCount || this.getFrontAttackers(front).length || 4)));
             const engageTightness = front.phase === 'engage' ? 0.62 : 1;
-            const centerOffset = (attacker.formationColumn - (columns - 1) * 0.5) * (7 + front.scale * 4) * engageTightness;
-            const rowOffset = attacker.formationRow * (7 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1);
-            let tacticOffset = centerOffset;
+            const formationOffset = this.getFormationOffsets(
+                front.tactics.attackerFormation,
+                attacker.role || 'frontline',
+                attacker.formationRow || 0,
+                attacker.formationColumn || 0,
+                columns,
+                (attacker.formationColumn - (columns - 1) * 0.5) * (7 + front.scale * 4) * engageTightness,
+                attacker.formationRow * (7 + front.scale * 3) * (front.phase === 'engage' ? 0.72 : 1)
+            );
+            let tacticOffset = formationOffset.lateral;
+            const rowOffset = formationOffset.depth;
             if (front.tactics.attacker === 'flank' && attacker.role !== 'frontline') {
                 tacticOffset *= 1.65;
             }
@@ -1084,10 +1263,12 @@
             if (this.isFrontReadyToEngage(front, defenders)) {
                 front.phase = 'engage';
                 front.phaseTime = 0;
+                front.engageTime = 0;
                 this.noteFrontMoment(front, 'Both lines formed and the battle was joined.');
             } else if (front.surpriseTriggered && front.phaseTime >= front.musterTime * 0.6) {
                 front.phase = 'engage';
                 front.phaseTime = 0;
+                front.engageTime = 0;
                 this.noteFrontMoment(front, 'The line broke early under surprise pressure.');
             }
         }
@@ -1096,6 +1277,9 @@
             let best = null;
             let bestDistance = 18 + front.scale * 8;
             for (const colonist of defenders) {
+                if (!this.canBreakFormationForTarget(front, attacker, colonist)) {
+                    continue;
+                }
                 const currentDistance = distance(attacker, colonist);
                 if (currentDistance < bestDistance) {
                     bestDistance = currentDistance;
@@ -1176,6 +1360,7 @@
             front.outcome = outcome;
             front.ttl = 2.8;
             front.lastResolvedAt = this.world.elapsed;
+            this.transitionResolvedFactionUnits(front, outcome);
 
             const colony = this.world.getActiveBranchColonies().find((entry) => entry.id === front.colonyId) || null;
             const defenderColony = this.world.getActiveBranchColonies().find((entry) => entry.id === front.defenderColonyId) || null;
@@ -1208,12 +1393,12 @@
                     });
                 }
                 if (front.mode === 'outbound') {
-                    this.clearBattleOrders(front);
+                    this.clearBattleOrders(front, true);
                     this.world.recordFactionEvent(`${colony?.name || front.colonyName} repelled the main settlement's attack.`);
                 } else if (front.mode === 'intercolonial') {
                     this.world.recordFactionEvent(`${defenderColony?.name || front.defenderColonyName || 'The defenders'} held against ${colony?.name || front.colonyName}.`);
                 } else {
-                    this.clearBattleOrders(front);
+                    this.clearBattleOrders(front, true);
                     this.world.recordFactionEvent(`The settlement broke the warband from ${front.colonyName}.`);
                 }
                 return;
@@ -1252,12 +1437,12 @@
                 });
             }
             if (front.mode === 'outbound') {
-                this.clearBattleOrders(front);
+                this.clearBattleOrders(front, true);
                 this.world.recordFactionEvent(`The main settlement overran ${front.colonyName}'s frontier line.`);
             } else if (front.mode === 'intercolonial') {
                 this.world.recordFactionEvent(`${colony?.name || front.colonyName} overran ${defenderColony?.name || front.defenderColonyName || 'the rival frontier line'}.`);
             } else {
-                this.clearBattleOrders(front);
+                this.clearBattleOrders(front, true);
                 this.world.recordFactionEvent(`${front.colonyName} overran the defenders at the frontier battle.`);
             }
         }
@@ -1327,8 +1512,71 @@
             };
         }
 
-        clearBattleOrders(front) {
-            this.world.removeFactionUnitsByBattlefront(front.id);
+        transitionResolvedFactionUnits(front, outcome) {
+            const losingSide = outcome === 'attackers' ? 'defenders' : 'attackers';
+            const contact = this.getContactAnchor(front);
+            const attackerFallback = {
+                x: front.formation.attackerOrigin.x - front.formation.advanceVector.x * (26 + front.scale * 18),
+                y: front.formation.attackerOrigin.y - front.formation.advanceVector.y * (26 + front.scale * 18)
+            };
+            const defenderFallback = this.getDefenderFallbackAnchor(front);
+            const attackersWon = outcome === 'attackers';
+
+            for (const attacker of this.getFrontAttackers(front)) {
+                if (!attacker?.alive || attacker.hp <= 0) {
+                    continue;
+                }
+                attacker.battlefrontId = null;
+                attacker.commandOrder = null;
+                attacker.commandTarget = null;
+                if (losingSide === 'attackers') {
+                    attacker.transientMode = 'retreat';
+                    attacker.transientTtl = 8 + front.scale * 3;
+                    attacker.retreatTarget = {
+                        x: attackerFallback.x + front.formation.flankVector.x * ((attacker.formationColumn - 1.5) * 8),
+                        y: attackerFallback.y + front.formation.flankVector.y * ((attacker.formationColumn - 1.5) * 8)
+                    };
+                } else {
+                    attacker.transientMode = attackersWon ? 'pursue' : 'rally';
+                    attacker.transientTtl = attackersWon ? 5.5 + front.scale * 2 : 4.5 + front.scale * 1.5;
+                    attacker.retreatTarget = attackersWon
+                        ? {
+                            x: contact.x + front.formation.advanceVector.x * (14 + front.scale * 10),
+                            y: contact.y + front.formation.advanceVector.y * (14 + front.scale * 10)
+                        }
+                        : { x: contact.x, y: contact.y };
+                }
+            }
+
+            for (const defender of this.getFrontDefenders(front)) {
+                if (!defender?.alive || defender.hp <= 0) {
+                    continue;
+                }
+                defender.battlefrontId = null;
+                defender.commandOrder = null;
+                defender.commandTarget = null;
+                if (losingSide === 'defenders') {
+                    defender.transientMode = 'retreat';
+                    defender.transientTtl = 8 + front.scale * 3;
+                    defender.retreatTarget = {
+                        x: defenderFallback.x + front.formation.flankVector.x * ((defender.formationColumn - 1.5) * 8),
+                        y: defenderFallback.y + front.formation.flankVector.y * ((defender.formationColumn - 1.5) * 8)
+                    };
+                } else {
+                    defender.transientMode = 'rally';
+                    defender.transientTtl = 4.8 + front.scale * 1.6;
+                    defender.retreatTarget = {
+                        x: front.formation.defenderAnchor.x,
+                        y: front.formation.defenderAnchor.y
+                    };
+                }
+            }
+        }
+
+        clearBattleOrders(front, preserveFactionUnits = false) {
+            if (!preserveFactionUnits) {
+                this.world.removeFactionUnitsByBattlefront(front.id);
+            }
             for (const colonist of this.world.colonists) {
                 if (colonist.assignedBattlefrontId === front.id) {
                     colonist.assignedBattlefrontId = null;
@@ -1462,7 +1710,9 @@
                 `Target: ${targetLabel}`,
                 `Commanders: ${front.commanders.attackers.name} vs ${front.commanders.defenders.name}`,
                 `Attacker tactic: ${titleCase(front.tactics.attacker)}`,
+                `Attacker formation: ${titleCase(String(front.tactics.attackerFormation || 'line').replace(/-/g, ' '))}`,
                 `Defender tactic: ${titleCase(front.tactics.defender)}`,
+                `Defender formation: ${titleCase(String(front.tactics.defenderFormation || 'line').replace(/-/g, ' '))}`,
                 `Attackers fielded: ${front.initialAttackerCount}`,
                 `Defenders present: ${defenderCount}`,
                 `Attacker losses: ${front.attackerCasualties}`,

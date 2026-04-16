@@ -1733,6 +1733,7 @@
             this.drawFactionEffects(ctx);
             this.drawFactionParties(ctx);
             this.drawBattlefronts(ctx);
+            this.drawDetachedFactionUnits(ctx);
             for (const project of this.world.projects) {
                 this.drawProject(ctx, project);
             }
@@ -1807,6 +1808,23 @@
                     }
                 }
                 if (front.phase === 'muster' && front.formation?.attackerOrigin && front.formation?.defenderAnchor) {
+                    const defenderMuster = front.formation.defenderOrigin || front.formation.defenderAnchor;
+                    this.drawFormationGuide(
+                        ctx,
+                        front,
+                        'attackers',
+                        front.formation.attackerOrigin,
+                        `rgba(238, 214, 178, ${0.42 * alpha})`,
+                        alpha
+                    );
+                    this.drawFormationGuide(
+                        ctx,
+                        front,
+                        'defenders',
+                        defenderMuster,
+                        `rgba(170, 219, 162, ${0.4 * alpha})`,
+                        alpha
+                    );
                     ctx.setLineDash([5, 4]);
                     ctx.strokeStyle = `rgba(238, 214, 178, ${0.65 * alpha})`;
                     ctx.lineWidth = 1.6;
@@ -1815,7 +1833,7 @@
                     ctx.stroke();
                     ctx.strokeStyle = `rgba(170, 219, 162, ${0.6 * alpha})`;
                     ctx.beginPath();
-                    ctx.arc(front.formation.defenderAnchor.x, front.formation.defenderAnchor.y, 14 + front.scale * 6, 0, Math.PI * 2);
+                    ctx.arc(defenderMuster.x, defenderMuster.y, 14 + front.scale * 6, 0, Math.PI * 2);
                     ctx.stroke();
                     ctx.setLineDash([]);
                     if (detailedOverlay) {
@@ -1824,8 +1842,20 @@
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'bottom';
                         ctx.fillText('Attack Muster', front.formation.attackerOrigin.x, front.formation.attackerOrigin.y - 16);
+                        ctx.fillStyle = `rgba(241, 222, 189, ${0.88 * alpha})`;
+                        ctx.fillText(
+                            this.formatBattleFormationLabel(front.tactics?.attackerFormation || 'line'),
+                            front.formation.attackerOrigin.x,
+                            front.formation.attackerOrigin.y + 28 + front.scale * 6
+                        );
                         ctx.fillStyle = `rgba(208, 235, 194, ${0.9 * alpha})`;
-                        ctx.fillText('Defense Muster', front.formation.defenderAnchor.x, front.formation.defenderAnchor.y - 16);
+                        ctx.fillText('Defense Muster', defenderMuster.x, defenderMuster.y - 16);
+                        ctx.fillStyle = `rgba(205, 229, 194, ${0.88 * alpha})`;
+                        ctx.fillText(
+                            this.formatBattleFormationLabel(front.tactics?.defenderFormation || 'line'),
+                            defenderMuster.x,
+                            defenderMuster.y + 28 + front.scale * 6
+                        );
                         ctx.fillStyle = `rgba(244, 220, 181, ${0.9 * alpha})`;
                         ctx.fillText(`Muster ${Math.max(0, front.musterTime - front.phaseTime).toFixed(1)}s`, front.x, front.y - radius - 16);
                         ctx.textAlign = 'start';
@@ -1929,6 +1959,31 @@
             }
         }
 
+        drawDetachedFactionUnits(ctx) {
+            const bounds = this.getViewBounds();
+            for (const unit of this.world.factionUnits || []) {
+                if (!unit.alive || unit.hp <= 0 || unit.battlefrontId) {
+                    continue;
+                }
+                if (!this.isCircleVisible(bounds, unit.x, unit.y, 18, 14)) {
+                    continue;
+                }
+                const alpha = Math.max(0.2, Math.min(0.9, (unit.transientTtl || 0) / 8));
+                if (unit.transientMode === 'retreat' || unit.transientMode === 'pursue') {
+                    ctx.strokeStyle = unit.transientMode === 'retreat'
+                        ? `rgba(235, 183, 132, ${0.35 * alpha})`
+                        : `rgba(198, 229, 168, ${0.34 * alpha})`;
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.arc(unit.x, unit.y + 2, 10, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+                if (!this.drawFactionUnitSprite(ctx, unit)) {
+                    this.drawBattleFighter(ctx, unit.x, unit.y, '#b6584e', '#f0b5aa', true, unit.posture === 'engaged');
+                }
+            }
+        }
+
         getBattleOrderArrow(front, side, contactAnchor) {
             if (!front?.formation || !contactAnchor) {
                 return null;
@@ -1939,7 +1994,9 @@
                 .map((part) => part[0].toUpperCase() + part.slice(1))
                 .join(' ');
             const state = side === 'attackers' ? front.orderState?.attackers : front.orderState?.defenders;
-            const from = side === 'attackers' ? front.formation.attackerOrigin : front.formation.defenderAnchor;
+            const from = side === 'attackers'
+                ? front.formation.attackerOrigin
+                : (front.phase === 'muster' ? (front.formation.defenderOrigin || front.formation.defenderAnchor) : front.formation.defenderAnchor);
             const advance = side === 'attackers'
                 ? front.formation.advanceVector
                 : { x: -front.formation.advanceVector.x, y: -front.formation.advanceVector.y };
@@ -2031,6 +2088,105 @@
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'bottom';
                 ctx.fillText(arrow.label, (arrow.from.x + arrow.to.x) * 0.5, (arrow.from.y + arrow.to.y) * 0.5 - 4);
+            }
+            ctx.restore();
+        }
+
+        formatBattleFormationLabel(name) {
+            return String(name || 'line')
+                .replace(/-/g, ' ')
+                .split(' ')
+                .filter(Boolean)
+                .map((part) => part[0].toUpperCase() + part.slice(1))
+                .join(' ');
+        }
+
+        drawFormationGuide(ctx, front, side, anchor, color, alpha) {
+            if (!front?.formation || !anchor) {
+                return;
+            }
+            const formation = side === 'attackers'
+                ? (front.tactics?.attackerFormation || 'line')
+                : (front.tactics?.defenderFormation || 'line');
+            const advance = side === 'attackers'
+                ? front.formation.advanceVector
+                : { x: -front.formation.advanceVector.x, y: -front.formation.advanceVector.y };
+            const flank = front.formation.flankVector;
+            const spread = 10 + front.scale * 7;
+            const depth = 10 + front.scale * 8;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = 1.15;
+            const dot = (x, y, radius = 1.9) => {
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            };
+            const line = (ax, ay, bx, by) => {
+                ctx.beginPath();
+                ctx.moveTo(ax, ay);
+                ctx.lineTo(bx, by);
+                ctx.stroke();
+            };
+            if (formation === 'vanguard-wedge') {
+                line(anchor.x, anchor.y - depth * 0.8, anchor.x - flank.x * spread - advance.x * depth, anchor.y - flank.y * spread - advance.y * depth);
+                line(anchor.x, anchor.y - depth * 0.8, anchor.x + flank.x * spread - advance.x * depth, anchor.y + flank.y * spread - advance.y * depth);
+                dot(anchor.x, anchor.y - depth * 0.8, 2.2);
+            } else if (formation === 'encircle') {
+                const left = { x: anchor.x - flank.x * spread * 1.5 - advance.x * depth * 0.25, y: anchor.y - flank.y * spread * 1.5 - advance.y * depth * 0.25 };
+                const right = { x: anchor.x + flank.x * spread * 1.5 - advance.x * depth * 0.25, y: anchor.y + flank.y * spread * 1.5 - advance.y * depth * 0.25 };
+                const rear = { x: anchor.x - advance.x * depth * 1.3, y: anchor.y - advance.y * depth * 1.3 };
+                line(left.x, left.y, rear.x, rear.y);
+                line(right.x, right.y, rear.x, rear.y);
+                dot(left.x, left.y);
+                dot(right.x, right.y);
+                dot(rear.x, rear.y);
+            } else if (formation === 'stacked-lines') {
+                for (let row = 0; row < 3; row += 1) {
+                    const offset = row * depth * 0.55;
+                    line(
+                        anchor.x - flank.x * spread - advance.x * offset,
+                        anchor.y - flank.y * spread - advance.y * offset,
+                        anchor.x + flank.x * spread - advance.x * offset,
+                        anchor.y + flank.y * spread - advance.y * offset
+                    );
+                }
+            } else if (formation === 'screen-line') {
+                line(
+                    anchor.x - flank.x * spread * 1.25 - advance.x * depth * 0.2,
+                    anchor.y - flank.y * spread * 1.25 - advance.y * depth * 0.2,
+                    anchor.x + flank.x * spread * 1.25 - advance.x * depth * 0.2,
+                    anchor.y + flank.y * spread * 1.25 - advance.y * depth * 0.2
+                );
+                line(
+                    anchor.x - flank.x * spread * 0.5 - advance.x * depth * 0.95,
+                    anchor.y - flank.y * spread * 0.5 - advance.y * depth * 0.95,
+                    anchor.x + flank.x * spread * 0.5 - advance.x * depth * 0.95,
+                    anchor.y + flank.y * spread * 0.5 - advance.y * depth * 0.95
+                );
+            } else if (formation === 'crescent') {
+                ctx.beginPath();
+                ctx.arc(anchor.x, anchor.y - depth * 0.25, spread * 1.2, Math.PI * 0.12, Math.PI * 0.88);
+                ctx.stroke();
+            } else if (formation === 'checker') {
+                const points = [
+                    [-0.8, -0.2], [0.3, -0.55], [0.9, -0.05],
+                    [-0.35, -0.95], [0.45, -1.05]
+                ];
+                for (const [fx, fy] of points) {
+                    dot(
+                        anchor.x + flank.x * spread * fx + advance.x * depth * fy,
+                        anchor.y + flank.y * spread * fx + advance.y * depth * fy
+                    );
+                }
+            } else {
+                line(
+                    anchor.x - flank.x * spread,
+                    anchor.y - flank.y * spread,
+                    anchor.x + flank.x * spread,
+                    anchor.y + flank.y * spread
+                );
             }
             ctx.restore();
         }
@@ -2636,13 +2792,14 @@
         }
 
         getCropStructureFrame(building) {
-            const visualSkew = this.getStructureVisualCycleSkew(building);
-            const normalizedGrowth = clamp((building.harvestTimer || 0) / (18 * visualSkew), 0, 0.999);
             const visibleFrames = STRUCTURE_SPRITE_CONFIG.frames.crop;
-            const stage = Math.min(
+            const legacyStage = Math.min(
                 visibleFrames.length - 1,
-                Math.floor(normalizedGrowth * visibleFrames.length)
+                Math.floor(clamp((building.harvestTimer || 0) / 18, 0, 0.999) * visibleFrames.length)
             );
+            const stage = Number.isFinite(building.cropStage)
+                ? clamp(building.cropStage, 0, visibleFrames.length - 1)
+                : legacyStage;
             return visibleFrames[stage];
         }
 
