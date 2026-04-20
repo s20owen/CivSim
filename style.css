@@ -607,6 +607,131 @@ h2 {
     word-break: break-word;
 }
 
+#thought-feed .colonist-card {
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 9px;
+    padding: 8px;
+    border: 1px solid rgba(214, 195, 154, 0.18);
+    border-left: 3px solid rgba(142, 194, 130, 0.72);
+    background:
+        linear-gradient(180deg, rgba(25, 34, 24, 0.56), rgba(17, 14, 10, 0.42)),
+        rgba(12, 9, 6, 0.2);
+    cursor: pointer;
+}
+
+#thought-feed .colonist-card:hover {
+    border-color: rgba(214, 195, 154, 0.32);
+    box-shadow: inset 0 0 0 1px rgba(255, 234, 180, 0.16);
+}
+
+#thought-feed .colonist-card.is-selected {
+    border-color: rgba(255, 224, 124, 0.7);
+    outline: 2px solid rgba(255, 224, 124, 0.55);
+    outline-offset: -3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 234, 180, 0.16);
+}
+
+#thought-feed .colonist-card.is-strained {
+    border-left-color: rgba(226, 169, 75, 0.9);
+}
+
+#thought-feed .colonist-card.is-critical {
+    border-left-color: rgba(222, 92, 73, 0.95);
+    background:
+        linear-gradient(180deg, rgba(69, 30, 24, 0.56), rgba(22, 12, 9, 0.45)),
+        rgba(12, 9, 6, 0.2);
+}
+
+#thought-feed .colonist-card.is-empty {
+    display: block;
+    cursor: default;
+    color: #e9f0d3;
+}
+
+.colonist-portrait {
+    position: relative;
+    width: 38px;
+    height: 48px;
+    align-self: start;
+    border: 1px solid rgba(255, 239, 194, 0.18);
+    background:
+        radial-gradient(circle at 50% 22%, rgba(255, 224, 161, 0.2), transparent 38%),
+        linear-gradient(180deg, rgba(86, 67, 43, 0.8), rgba(31, 24, 18, 0.86));
+    box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.12);
+}
+
+.portrait-head {
+    position: absolute;
+    left: 11px;
+    top: 8px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #d7a66d;
+    box-shadow:
+        inset 3px 0 0 rgba(86, 49, 30, 0.32),
+        0 0 0 2px rgba(56, 34, 23, 0.45);
+}
+
+.portrait-body {
+    position: absolute;
+    left: 9px;
+    top: 25px;
+    width: 20px;
+    height: 16px;
+    border-radius: 7px 7px 3px 3px;
+    background: linear-gradient(180deg, #7d8f53, #4c6338);
+    box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.16);
+}
+
+.colonist-card-main {
+    min-width: 0;
+}
+
+.colonist-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    align-items: baseline;
+    color: #fff8db;
+}
+
+.colonist-card-top strong {
+    font-size: 0.92rem;
+}
+
+.colonist-card-top span {
+    color: #ffe07c;
+    font-size: 0.74rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.colonist-card-job,
+.colonist-card-meta {
+    margin-top: 3px;
+    color: #dbcda7;
+    font-size: 0.74rem;
+    line-height: 1.22;
+}
+
+.colonist-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px 6px;
+    margin-top: 6px;
+    color: #fff1c3;
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.colonist-stat-grid span {
+    padding: 2px 4px;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(255, 245, 210, 0.08);
+}
+
 #sidebar:not(.is-collapsed) .panel-body {
     display: flex;
     flex-direction: column;
