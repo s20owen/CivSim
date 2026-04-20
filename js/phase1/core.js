@@ -32,18 +32,22 @@
 
     const resourcesConfig = {
         campStores: {
-            food: 14,
+            food: 12,
             water: 8,
-            wood: 20,
-            stone: 8,
-            fireFuel: 20
+            wood: 8,
+            stone: 3,
+            logs: 10
         },
         naturalNodes: {
-            waterClusterAmount: 50,
+            waterClusterAmount: 42,
             berriesBase: 26,
             berriesVariance: 16,
+            fallenWoodBase: 2,
+            fallenWoodVariance: 0,
             treesBase: 24,
             treesVariance: 18,
+            looseStoneBase: 1,
+            looseStoneVariance: 0,
             stoneBase: 18,
             stoneVariance: 14
         },
@@ -52,16 +56,22 @@
             berriesNear: 28,
             berriesFar: 34,
             berriesSouth: 30,
+            fallenWoodEast: 2,
+            fallenWoodWest: 2,
             treesEast: 34,
             treesWest: 30,
+            looseStone: 1,
             stone: 26
         },
         branchStarterNodes: {
             water: 50,
             berriesNorthEast: 26,
             berriesSouthWest: 24,
+            fallenWoodWest: 2,
+            fallenWoodEast: 2,
             treesWest: 28,
             treesEast: 24,
+            looseStone: 1,
             stone: 22
         }
     };
@@ -195,6 +205,19 @@
 
     const MATERIAL_KEYS = ['logs', 'fiber', 'planks', 'rope', 'hides'];
     const ITEM_TIERS = ['crude', 'standard', 'fine'];
+    const ROLE_KEYS = ['farmer', 'builder', 'gatherer', 'hunter', 'crafter', 'helper'];
+    const RESOURCE_DISCOVERY_KEYS = {
+        fallenWood: 'resource:trees',
+        looseStone: 'resource:stone'
+    };
+    const RESOURCE_DISPLAY_NAMES = {
+        fallenWood: 'fallen wood',
+        looseStone: 'loose stone',
+        trees: 'trees',
+        stone: 'stone',
+        berries: 'berries',
+        water: 'water'
+    };
 
     const ITEM_DEFS = {
         stick: { slot: null, durability: 0, quality: 1 },
@@ -204,8 +227,34 @@
         basket: { slot: 'hauling', durability: 16, quality: 1.1 },
         firePit: { slot: 'structure', durability: 0, quality: 1 },
         simpleClothing: { slot: 'clothing', durability: 20, quality: 1.08 },
+        furClothing: { slot: 'clothing', durability: 28, quality: 1.24 },
         hoe: { slot: 'farming', durability: 18, quality: 1.15 },
         hammer: { slot: 'building', durability: 20, quality: 1.18 }
+    };
+
+    const BUILDING_TOOL_TIERS = {
+        campfire: 'crude',
+        leanTo: 'crude',
+        hut: 'standard',
+        cottage: 'fine',
+        house: 'fine',
+        fortifiedStructure: 'fine',
+        stoneKeep: 'fine',
+        storagePit: 'crude',
+        storage: 'crude',
+        granary: 'standard',
+        warehouse: 'fine',
+        workshop: 'crude',
+        farmPlot: 'crude',
+        irrigation: 'standard',
+        engineeredFarm: 'fine',
+        canal: 'fine',
+        kitchen: 'standard',
+        foodHall: 'fine',
+        civicComplex: 'fine',
+        watchtower: 'standard',
+        wall: 'standard',
+        mill: 'fine'
     };
 
     const RECIPE_DEFS = {
@@ -253,6 +302,12 @@
             duration: 2.8,
             materials: { fiber: 3 },
             unlocks: (world) => world.colonyKnowledge.discoveries.includes('resource:trees') || world.colonyKnowledge.discoveries.includes('resource:wildAnimal')
+        },
+        furClothing: {
+            output: 'furClothing',
+            duration: 3.4,
+            materials: { hides: 2, fiber: 1 },
+            unlocks: (world) => world.colonyKnowledge.discoveries.includes('resource:wildAnimal') || world.colonyKnowledge.discoveries.includes('skill:hunting')
         },
         hoe: {
             output: 'hoe',
@@ -452,6 +507,7 @@
     };
 
     const BUILDING_UPGRADES = {
+        hut: ['leanTo'],
         cottage: ['hut'],
         house: ['cottage'],
         fortifiedStructure: ['house'],
@@ -463,6 +519,62 @@
         warehouse: ['granary'],
         engineeredFarm: ['farmPlot'],
         canal: ['irrigation']
+    };
+
+    const BUILDING_LINEAGES = {
+        shelter: ['leanTo', 'hut', 'cottage', 'house', 'fortifiedStructure', 'stoneKeep'],
+        storage: ['storage', 'storagePit', 'granary', 'warehouse'],
+        food: ['campfire', 'kitchen', 'foodHall']
+    };
+
+    const BUILDING_ERA_REQUIREMENTS = {
+        leanTo: 'survival',
+        hut: 'toolmaking',
+        cottage: 'masonry',
+        house: 'engineering',
+        fortifiedStructure: 'metallurgy',
+        storage: 'toolmaking',
+        storagePit: 'agriculture',
+        granary: 'agriculture',
+        warehouse: 'engineering',
+        campfire: 'survival',
+        kitchen: 'agriculture',
+        foodHall: 'engineering'
+    };
+
+    const BUILDING_UPGRADE_REUSE_FACTORS = {
+        shelter: 0.22,
+        storage: 0.32,
+        food: 0.38,
+        default: 0.28
+    };
+
+    const BUILDING_UPGRADE_TIME_FACTORS = {
+        shelter: 0.9,
+        storage: 0.84,
+        food: 0.8,
+        default: 0.82
+    };
+
+    const BUILDING_HOME_SLOTS = {
+        leanTo: 2,
+        hut: 4,
+        cottage: 5,
+        house: 6,
+        fortifiedStructure: 8,
+        stoneKeep: 10
+    };
+
+    const BUILDING_DOWNGRADES = {
+        stoneKeep: 'fortifiedStructure',
+        fortifiedStructure: 'house',
+        house: 'cottage',
+        cottage: 'hut',
+        hut: 'leanTo',
+        warehouse: 'granary',
+        granary: 'storage',
+        foodHall: 'kitchen',
+        kitchen: 'campfire'
     };
 
     const TECH_BANDS = [
@@ -1023,6 +1135,18 @@
                 ...((snapshot?.memory?.actionConfidence) || {})
             }
         };
+        colonist.roleDisposition = {
+            ...createRoleDisposition(rng, colonist.traits || {}),
+            ...(clone(snapshot?.roleDisposition || {}) || {})
+        };
+        colonist.rolePractice = {
+            ...createRoleTracker(0),
+            ...(clone(snapshot?.rolePractice || {}) || {})
+        };
+        colonist.socialDisposition = {
+            ...createSocialDisposition(rng, colonist.traits || {}),
+            ...(clone(snapshot?.socialDisposition || {}) || {})
+        };
         colonist.worldRef = null;
         return colonist;
     }
@@ -1033,7 +1157,9 @@
             knownResources: {
                 water: [],
                 berries: [],
+                fallenWood: [],
                 trees: [],
+                looseStone: [],
                 stone: [],
                 wildAnimal: []
             },
@@ -1042,6 +1168,7 @@
                 starvation: 0,
                 exposure: 0,
                 exhaustion: 0,
+                disease: 0,
                 predatorAttack: 0,
                 lightningStrike: 0
             },
@@ -1083,7 +1210,9 @@
             resources: {
                 water: [],
                 berries: [],
+                fallenWood: [],
                 trees: [],
+                looseStone: [],
                 stone: [],
                 wildAnimal: []
             },
@@ -1096,6 +1225,10 @@
         };
     }
 
+    function createRoleTracker(fill = 0) {
+        return Object.fromEntries(ROLE_KEYS.map((role) => [role, fill]));
+    }
+
     function createTraitProfile(rng = Math.random, overrides = {}) {
         return {
             bravery: 0.35 + rng() * 0.3,
@@ -1106,6 +1239,36 @@
             endurance: 0.35 + rng() * 0.3,
             fertility: 0.35 + rng() * 0.3,
             learningSpeed: 0.35 + rng() * 0.3,
+            ...overrides
+        };
+    }
+
+    function createRoleDisposition(rng = Math.random, traits = {}, overrides = {}) {
+        const sociability = traits.sociability ?? 0.5;
+        const curiosity = traits.curiosity ?? 0.5;
+        const bravery = traits.bravery ?? 0.5;
+        const caution = traits.caution ?? 0.5;
+        const endurance = traits.endurance ?? 0.5;
+        const aggression = traits.aggression ?? 0.35;
+        const learningSpeed = traits.learningSpeed ?? 0.5;
+        return {
+            farmer: clamp(0.08 + rng() * 0.14 + endurance * 0.06 + caution * 0.05, 0, 1.5),
+            builder: clamp(0.08 + rng() * 0.14 + curiosity * 0.05 + endurance * 0.06, 0, 1.5),
+            gatherer: clamp(0.08 + rng() * 0.14 + endurance * 0.07 + caution * 0.03, 0, 1.5),
+            hunter: clamp(0.06 + rng() * 0.13 + bravery * 0.08 - caution * 0.03, 0, 1.5),
+            crafter: clamp(0.08 + rng() * 0.14 + curiosity * 0.08 + learningSpeed * 0.05, 0, 1.5),
+            helper: clamp(0.06 + rng() * 0.12 + sociability * 0.1 + caution * 0.03 - aggression * 0.04, 0, 1.5),
+            ...overrides
+        };
+    }
+
+    function createSocialDisposition(rng = Math.random, traits = {}, overrides = {}) {
+        const sociability = traits.sociability ?? 0.5;
+        const aggression = traits.aggression ?? 0.35;
+        const caution = traits.caution ?? 0.5;
+        return {
+            helpfulness: clamp(0.18 + rng() * 0.2 + sociability * 0.18 + caution * 0.06 - aggression * 0.05, 0, 1.5),
+            selfishness: clamp(0.12 + rng() * 0.16 + aggression * 0.14 - sociability * 0.06, 0, 1.5),
             ...overrides
         };
     }
@@ -1160,10 +1323,13 @@
         return tier === 'fine' ? 'fine' : tier === 'standard' ? 'worked' : 'crude';
     }
 
-    function createItem(id, type, craftingSkill = 0, minTier = null) {
+    function createItem(id, type, craftingSkill = 0, minTier = null, maxTier = null) {
         const def = ITEM_DEFS[type];
         const skillTier = getQualityTierFromSkill(craftingSkill);
-        const tier = minTier && getTierRank(minTier) > getTierRank(skillTier) ? minTier : skillTier;
+        let tier = minTier && getTierRank(minTier) > getTierRank(skillTier) ? minTier : skillTier;
+        if (maxTier && getTierRank(tier) > getTierRank(maxTier)) {
+            tier = maxTier;
+        }
         const durabilityBase = def?.durability || 0;
         const quality = getQualityMultiplier(tier, def?.quality || 1);
         const durabilityScale = tier === 'fine' ? 1.25 : tier === 'standard' ? 1.1 : 0.95;
@@ -1281,6 +1447,7 @@
             this.threatDistance = Infinity;
             this.cachedLocalWeather = null;
             this.lastDamageCause = null;
+            this.collapseEventCooldown = 0;
             this.woundSeverity = 0;
             this.woundCount = 0;
             this.lastBattleHitTtl = 0;
@@ -1288,7 +1455,7 @@
             this.battleRole = null;
             this.battleFormationIndex = -1;
             this.battleOrderTtl = 0;
-            this.carrying = { type: null, amount: 0 };
+            this.carrying = { type: null, amount: 0, projectId: null };
             this.combatPower = 12 + (id % 3) * 2;
             this.memory = createKnowledgeLayer();
             this.inventory = {
@@ -1321,6 +1488,9 @@
             this.partnerId = null;
             this.homeBuildingId = null;
             this.traits = createTraitProfile(rng);
+            this.roleDisposition = createRoleDisposition(rng, this.traits);
+            this.rolePractice = createRoleTracker(0);
+            this.socialDisposition = createSocialDisposition(rng, this.traits);
             this.relationships = {
                 family: {},
                 friends: {},
@@ -1395,18 +1565,57 @@
             const season = world.getSeason();
             const temperature = world.getTemperatureAt(this.x, this.y);
             const nearCamp = distance(this, world.camp) < 80;
-            const fireComfort = nearCamp && world.camp.fireFuel > 4 ? 2.1 : 0;
-            const moveDrain = this.state === 'moving' ? 0.35 : 0;
+            const fireComfort = nearCamp && world.isCampFireLit() ? 2.1 : 0;
+            const weatherState = world.getWeatherStateAt(this.x, this.y);
+            const coldExposure = world.getColdExposureSeverity(this, { temperature, weather, season, weatherState });
+            const moveDrain = this.state === 'moving' ? 0.55 : 0;
             const sleepRecover = this.state === 'sleeping' ? 5.8 : 0;
+            const idleRecover = this.state === 'idle' && this.stats.energy < 82 ? 0.18 : 0;
+            const weatherFatigue = (
+                weatherState.movementPenalty * 0.42 +
+                (weather.name === 'Storm' ? 0.16 : 0) +
+                (weather.name === 'Rain' ? 0.06 : 0) +
+                (weather.name === 'Cold Snap' ? 0.14 : 0) +
+                (weather.name === 'Drought' ? 0.12 : 0)
+            ) + coldExposure * 0.22;
 
-            this.stats.hunger = clamp(this.stats.hunger - dt * (0.34 * season.hunger + moveDrain * 0.16), 0, 100);
-            this.stats.thirst = clamp(this.stats.thirst - dt * (0.38 * season.thirst * weather.thirst + moveDrain * 0.14), 0, 100);
+            this.stats.hunger = clamp(this.stats.hunger - dt * (0.26 * season.hunger + moveDrain * 0.12), 0, 100);
+            this.stats.thirst = clamp(this.stats.thirst - dt * (0.28 * season.thirst * weather.thirst + moveDrain * 0.1), 0, 100);
             const enduranceBonus = 1 - this.traits.endurance * 0.18;
-            this.stats.energy = clamp(this.stats.energy - dt * (0.38 + moveDrain * 0.26) * enduranceBonus + dt * (sleepRecover + 0.55), 0, 100);
+            this.stats.energy = clamp(
+                this.stats.energy -
+                    dt * (0.18 + moveDrain * 0.55 + weatherFatigue) * enduranceBonus +
+                    dt * (sleepRecover + idleRecover),
+                0,
+                100
+            );
 
-            const coldStress = clamp((8 - temperature) / 18, 0, 2.2) * weather.warmth;
-            const clothingReduction = this.equipment.clothing ? 0.7 : 1;
-            this.stats.warmth = clamp(this.stats.warmth - dt * Math.max(0.2, coldStress) * clothingReduction + dt * fireComfort, 0, 100);
+            const clothingReduction = world.getColdProtectionMultiplier(this);
+            const coldStress = Math.max(0.2, coldExposure * 1.18) * clothingReduction;
+            this.stats.warmth = clamp(this.stats.warmth - dt * coldStress + dt * fireComfort, 0, 100);
+            this.exposureSickness = clamp((this.exposureSickness || 0) - dt * (nearCamp ? 0.036 : 0.012), 0, 1);
+            this.exposureEventCooldown = Math.max(0, (this.exposureEventCooldown || 0) - dt);
+            this.sicknessTtl = Math.max(0, (this.sicknessTtl || 0) - dt);
+            this.collapseEventCooldown = Math.max(0, (this.collapseEventCooldown || 0) - dt);
+            if (coldExposure > 0.8 && this.stats.warmth < 42) {
+                const wetPenalty = weather.name === 'Rain' || weather.name === 'Storm' ? 0.45 : 0;
+                const lowEnergyPenalty = this.stats.energy < 28 ? 0.38 : 0;
+                const resilience = (this.traits.endurance || 0) * 0.34 + (this.equipment.clothing ? 0.2 : 0) + (world.hasTechnology('insulation') ? 0.18 : 0);
+                const sicknessGain = Math.max(0, coldExposure - 0.65 + wetPenalty + lowEnergyPenalty - resilience);
+                this.exposureSickness = clamp((this.exposureSickness || 0) + dt * sicknessGain * 0.018, 0, 1);
+                if (this.exposureSickness > 0.36) {
+                    this.lastDamageCause = 'disease';
+                    this.sicknessTtl = Math.max(this.sicknessTtl || 0, 36);
+                    this.stats.health = clamp(this.stats.health - dt * this.exposureSickness * 0.18, 0, 100);
+                    this.stats.energy = clamp(this.stats.energy - dt * this.exposureSickness * 0.14, 0, 100);
+                    world.phase9.pressure.disease = clamp((world.phase9.pressure.disease || 0) + dt * 0.0015, 0, 1);
+                    world.noteDiscovery('skill:cold_weather', `${this.name} learned how dangerous cold exposure can be.`);
+                    if (this.exposureEventCooldown <= 0 && world.rng() < dt * 0.035 * this.exposureSickness) {
+                        world.pushEvent(`${this.name} grew sick from cold exposure.`);
+                        this.exposureEventCooldown = 42;
+                    }
+                }
+            }
 
             const moraleDelta = (
                 (this.stats.hunger < 28 ? -0.9 : 0) +
@@ -1423,10 +1632,30 @@
             this.stats.morale = clamp(this.stats.morale + dt * moraleDelta, 0, 100);
 
             const danger = [this.stats.hunger, this.stats.thirst, this.stats.warmth, this.stats.energy].filter((v) => v <= 0).length;
-            if (danger > 0) {
-                this.stats.health = clamp(this.stats.health - dt * (1.5 + danger * 1.3), 0, 100);
-            } else if (nearCamp) {
-                this.stats.health = clamp(this.stats.health + dt * 0.55, 0, 100);
+            const criticalNeedDamage =
+                Math.max(0, 20 - this.stats.thirst) * 0.1 +
+                Math.max(0, 18 - this.stats.hunger) * 0.075 +
+                Math.max(0, 16 - this.stats.warmth) * 0.065 +
+                Math.max(0, 8 - this.stats.energy) * 0.035;
+            const activeSickness = (this.sicknessTtl || 0) > 0 || (this.exposureSickness || 0) > 0.36;
+            if (activeSickness) {
+                this.lastDamageCause = 'disease';
+                const sicknessSeverity = clamp((this.sicknessTtl || 0) / 80 + (this.exposureSickness || 0), 0.25, 1.4);
+                this.stats.health = clamp(this.stats.health - dt * sicknessSeverity * 0.11, 0, 100);
+                this.stats.energy = clamp(this.stats.energy - dt * sicknessSeverity * 0.05, 0, 100);
+            }
+            if (criticalNeedDamage > 0 || danger > 0) {
+                this.stats.health = clamp(this.stats.health - dt * (0.45 + criticalNeedDamage + danger * 1.1), 0, 100);
+            } else if (!activeSickness) {
+                const stableVitals = this.stats.hunger > 34 && this.stats.thirst > 34 && this.stats.warmth > 26 && this.stats.energy > 8;
+                const recoveryRate = nearCamp
+                    ? (stableVitals ? 0.85 : 0.55)
+                    : (stableVitals && this.stats.health < 28 ? 0.08 : 0);
+                if (recoveryRate > 0) {
+                    this.stats.health = clamp(this.stats.health + dt * recoveryRate, 0, 100);
+                }
+            } else if (nearCamp && activeSickness && this.stats.hunger > 38 && this.stats.thirst > 38 && this.stats.warmth > 32) {
+                this.stats.health = clamp(this.stats.health + dt * 0.12, 0, 100);
             }
             if (nearCamp && this.stats.health > 72 && this.state !== 'moving') {
                 this.woundSeverity = clamp(this.woundSeverity - dt * 0.015, 0, 1);
@@ -1436,9 +1665,36 @@
             }
 
             if (this.stats.health <= 0) {
+                const fatalTrauma = ['battle', 'predatorAttack', 'lightningStrike'].includes(this.lastDamageCause);
+                const minimumVital = Math.min(this.stats.hunger, this.stats.thirst, this.stats.warmth);
+                const fatalNeedCollapse = minimumVital <= 3 ||
+                    danger >= 2 ||
+                    (this.stats.warmth <= 8 && coldExposure > 1.2);
+                const canLimpToCare = !activeSickness &&
+                    !fatalTrauma &&
+                    !fatalNeedCollapse &&
+                    this.stats.hunger > 24 &&
+                    this.stats.thirst > 24 &&
+                    this.stats.warmth > 14;
+                if (canLimpToCare) {
+                    this.stats.health = 1;
+                    this.stats.energy = clamp(Math.max(this.stats.energy, nearCamp ? 4 : 7), 0, 100);
+                    this.plan = [];
+                    this.planStep = 0;
+                    this.intent = 'tend';
+                    this.decisionCooldown = 0;
+                    this.pathRecalcCooldown = 0;
+                    if (this.collapseEventCooldown <= 0) {
+                        world.pushEvent(`${this.name} collapsed but still had enough strength to seek care.`);
+                        this.collapseEventCooldown = 48;
+                    }
+                    return;
+                }
                 this.alive = false;
                 if (this.lastDamageCause === 'battle') {
                     world.pushEvent(`${this.name} died from battle wounds.`);
+                } else if (activeSickness || this.lastDamageCause === 'disease') {
+                    world.pushEvent(`${this.name} died from sickness.`);
                 } else {
                     world.pushEvent(`${this.name} died after the environment overwhelmed their needs.`);
                 }
@@ -1511,7 +1767,20 @@
             if (currentStep.kind === 'resource' && currentStep.entity.type === 'water') {
                 return this.stats.thirst > 78 && this.intent !== 'drink';
             }
-            if (this.intent === 'warm' && world.camp.fireFuel <= 0 && this.stats.warmth < 20) {
+            if (this.stats.health < 22 && !['tend', 'sleep', 'eat', 'drink', 'warm'].includes(this.intent)) {
+                const hasRecoveryNeeds = this.stats.hunger > 28 && this.stats.thirst > 28 && this.stats.energy > 6 && this.stats.warmth > 20;
+                if (hasRecoveryNeeds || distance(this, world.camp) < 160) {
+                    return true;
+                }
+            }
+            if (this.stats.warmth < 30 && this.intent !== 'warm') {
+                const urgentIntent = ['drink', 'eat', 'flee', 'protect', 'war', 'tend'].includes(this.intent);
+                const urgentNeed = this.stats.thirst < 22 || this.stats.hunger < 22 || this.threatDistance < 80;
+                if (!urgentIntent && !urgentNeed) {
+                    return true;
+                }
+            }
+            if (this.intent === 'warm' && !world.isCampFireLit() && this.stats.warmth < 20) {
                 return true;
             }
             return false;
@@ -1587,7 +1856,7 @@
                     plan = world.buildRepairPlan(this);
                     break;
                 case 'plant':
-                    plan = world.buildPlantTrialPlan(this);
+                    plan = world.buildFarmingPlan(this);
                     break;
                 case 'socialize':
                     if (this.stats.morale > 62 || this.mood.social < 0.12) {
@@ -1638,6 +1907,16 @@
 
         buildPlan(world, buildOptions = {}) {
             const lowPriorityLod = Boolean(buildOptions.lowPriorityLod);
+            const carryPlan = world.buildCarryDeliveryPlan(this);
+            if (carryPlan) {
+                this.applySelectedPlan(world, {
+                    key: this.carrying.type === 'water' ? 'haulWater' : this.carrying.type === 'food' ? 'eat' : 'build',
+                    need: this.carrying.type === 'water' ? 'water_supply' : this.carrying.type === 'food' ? 'food_supply' : 'materials'
+                }, carryPlan, {
+                    lowPriorityLod
+                });
+                return;
+            }
             const stats = this.stats;
             const decisionOptions = [
                 {
@@ -1717,7 +1996,9 @@
                         world.getLessonBonus('dehydration', 'haulWater') -
                         world.getIntentPenalty('haulWater') +
                         world.getDivineSuggestionBonus('haulWater') +
-                        world.getCultureIntentBias('haulWater'),
+                        world.getCultureIntentBias('haulWater') +
+                        world.getRoleBias(this, 'helper') * 5 +
+                        world.getSocialDecisionBias(this, 'haulWater'),
                     builder: () => world.buildWaterHaulPlan(this)
                 },
                 {
@@ -1730,6 +2011,7 @@
                         (world.camp.food <= 0.5 && stats.hunger > 34 ? -20 : 0) -
                         world.getActionConfidence(this, 'eat') * 10 +
                         world.getTraitDecisionBias(this, 'eat') +
+                        world.getSocialDecisionBias(this, 'eat') +
                         world.getLessonBonus('starvation', 'eat') -
                         world.getIntentPenalty('eat') +
                         world.getDivineSuggestionBonus('eat'),
@@ -1739,7 +2021,9 @@
                     key: 'warm',
                     need: 'warmth',
                     score: (100 - stats.warmth) * 1.45 +
-                        Math.max(0, 10 - world.getTemperatureAt(this.x, this.y)) * 2.4 +
+                        Math.max(0, 10 - world.getTemperatureAt(this.x, this.y)) * 3.1 +
+                        world.getColdExposureSeverity(this) * 18 +
+                        ((world.getSeason().name === 'Winter' || world.getSeason().name === 'Autumn') && stats.warmth < 52 ? 18 : 0) +
                         world.getActionConfidence(this, 'warm') * 8 +
                         world.getTraitDecisionBias(this, 'warm') +
                         world.getLessonBonus('exposure', 'warm'),
@@ -1748,13 +2032,18 @@
                 {
                     key: 'sleep',
                     need: 'energy',
-                    score: (100 - stats.energy) * 1.18 + world.getLessonBonus('exhaustion', 'sleep') + this.emotionalMemory.griefLoad * 12 + world.getActionConfidence(this, 'sleep') * 10 + world.getTraitDecisionBias(this, 'sleep'),
+                    score: (100 - stats.energy) * 1.18 +
+                        Math.max(0, 28 - stats.health) * 1.2 +
+                        world.getLessonBonus('exhaustion', 'sleep') +
+                        this.emotionalMemory.griefLoad * 12 +
+                        world.getActionConfidence(this, 'sleep') * 10 +
+                        world.getTraitDecisionBias(this, 'sleep'),
                     builder: () => world.buildSleepPlan(this)
                 },
                 {
                     key: 'tend',
                     need: 'recovery',
-                    score: clamp(96 - stats.health, 0, 40) * 1.6 + (stats.health < 86 ? 20 : 0) + world.getActionConfidence(this, 'tend') * 10 + world.getTraitDecisionBias(this, 'tend'),
+                    score: world.getTendIntentScore(this) + world.getSocialDecisionBias(this, 'tend'),
                     builder: () => world.buildTendPlan(this)
                 },
                 {
@@ -1782,10 +2071,10 @@
                 {
                     key: 'gatherWood',
                     need: 'fuel',
-                    score: clamp(12 - world.camp.fireFuel, 0, 12) * 2.9 +
-                        world.getWoodShortfall() * 2.2 -
-                        world.getWoodSurplusPenalty() * 3.8 +
-                        world.getConstructionMaterialNeed('wood') * 3.4 +
+                    score: clamp(8 - world.getCampMaterial('logs'), 0, 8) * 3.2 +
+                        world.getWoodShortfall() * 1.6 -
+                        world.getWoodSurplusPenalty() * 5.8 +
+                        world.getConstructionMaterialNeed('wood') * 2.2 +
                         world.getLessonBonus('exposure', 'gatherWood') -
                         world.getActionConfidence(this, 'gatherWood') * 10 +
                         world.getIntentPenalty('gatherWood') +
@@ -1899,6 +2188,8 @@
                             world.getActionConfidence(this, 'socialize') * 10 +
                             world.getDivineSuggestionBonus('socialize') +
                             world.getCultureIntentBias('socialize') +
+                            world.getRoleBias(this, 'helper') * 8 +
+                            world.getSocialDecisionBias(this, 'socialize') +
                             (this.stats.morale < 55 ? 12 : this.stats.morale < 68 ? 4 : -8) +
                             world.getTraitDecisionBias(this, 'socialize') +
                             world.getEraDecisionBias('socialize')
@@ -1914,7 +2205,7 @@
                 {
                     key: 'rest',
                     need: 'steady',
-                    score: Math.max(0, 1 + (55 - stats.energy) * 0.18),
+                    score: Math.max(0, 1 + (55 - stats.energy) * 0.18 + Math.max(0, 34 - stats.health) * 1.1),
                     builder: () => world.buildRestPlan(this)
                 }
             ].sort((a, b) => b.score - a.score);
@@ -2022,7 +2313,8 @@
                 this.state = 'working';
                 this.vx = 0;
                 this.vy = 0;
-                this.actionProgress += dt;
+                world.applyActiveWorkFatigue(this, step.action, dt);
+                this.actionProgress += dt * this.getEnergyWorkMultiplier();
                 if (this.actionProgress < step.duration) {
                     return;
                 }
@@ -2045,7 +2337,8 @@
             this.state = this.intent === 'sleep' ? 'sleeping' : 'working';
             this.vx = 0;
             this.vy = 0;
-            this.actionProgress += dt;
+            world.applyActiveWorkFatigue(this, step.action, dt);
+            this.actionProgress += dt * this.getEnergyWorkMultiplier();
             if (this.actionProgress < step.duration) {
                 return;
             }
@@ -2094,7 +2387,8 @@
             const dy = target.y - this.y;
             const length = Math.hypot(dx, dy) || 1;
             const movementMultiplier = this.worldRef ? this.worldRef.getMovementSpeedMultiplierAt(this.x, this.y) : 1;
-            const effectiveSpeed = this.speed * movementMultiplier;
+            const energyMultiplier = this.getEnergyMoveMultiplier();
+            const effectiveSpeed = this.speed * movementMultiplier * energyMultiplier;
             const step = Math.min(length, effectiveSpeed * dt);
             this.vx = (dx / length) * effectiveSpeed;
             this.vy = (dy / length) * effectiveSpeed;
@@ -2106,6 +2400,47 @@
             if (this.worldRef) {
                 this.worldRef.recordTrafficAtPosition(this.x, this.y, 0.08);
             }
+        }
+
+        getEnergyMoveMultiplier() {
+            const coldMultiplier = this.getColdMobilityMultiplier();
+            if (this.stats.energy >= 65) {
+                return coldMultiplier;
+            }
+            if (this.stats.energy >= 35) {
+                return (0.82 + (this.stats.energy - 35) / 30 * 0.18) * coldMultiplier;
+            }
+            if (this.stats.energy >= 15) {
+                return (0.58 + (this.stats.energy - 15) / 20 * 0.24) * coldMultiplier;
+            }
+            return 0.42 * coldMultiplier;
+        }
+
+        getEnergyWorkMultiplier() {
+            const coldMultiplier = this.getColdMobilityMultiplier();
+            if (this.stats.energy >= 55) {
+                return coldMultiplier;
+            }
+            if (this.stats.energy >= 25) {
+                return (0.72 + (this.stats.energy - 25) / 30 * 0.28) * coldMultiplier;
+            }
+            if (this.stats.energy >= 10) {
+                return (0.48 + (this.stats.energy - 10) / 15 * 0.24) * coldMultiplier;
+            }
+            return 0.34 * coldMultiplier;
+        }
+
+        getColdMobilityMultiplier() {
+            if (this.stats.warmth >= 48) {
+                return 1;
+            }
+            if (this.stats.warmth >= 30) {
+                return 0.78 + (this.stats.warmth - 30) / 18 * 0.22;
+            }
+            if (this.stats.warmth >= 14) {
+                return 0.52 + (this.stats.warmth - 14) / 16 * 0.26;
+            }
+            return 0.36;
         }
     }
 
@@ -2155,7 +2490,8 @@
                 builder: 0,
                 gatherer: 0,
                 hunter: 0,
-                crafter: 0
+                crafter: 0,
+                helper: 0
             };
             this.projects = [];
             this.buildings = [];
@@ -2348,13 +2684,13 @@
                 wood: resourcesConfig.campStores.wood,
                 stone: resourcesConfig.campStores.stone,
                 shelter: 76,
-                fireFuel: resourcesConfig.campStores.fireFuel,
                 materials: createMaterialInventory(),
                 items: [],
                 structures: {
                     firePit: 0
                 }
             };
+            this.camp.materials.logs = resourcesConfig.campStores.logs;
             this.colonyKnowledge.shelterSpots.push({
                 x: Math.round(this.camp.x),
                 y: Math.round(this.camp.y)
@@ -2385,7 +2721,7 @@
             }
             if ((causes.exposure || 0) > 0) {
                 this.camp.wood += 6;
-                this.camp.fireFuel += 4;
+                this.addCampMaterial('logs', 3);
                 this.camp.shelter += 4;
             }
             if ((causes.exhaustion || 0) > 0) {
@@ -2398,7 +2734,7 @@
             }
             this.camp.wood += settlement.housingTier * 1.5 + settlement.civicTier;
             this.camp.stone += settlement.storageTier + settlement.defenseTier * 1.5;
-            this.camp.fireFuel += settlement.civicTier * 0.8;
+            this.addCampMaterial('logs', settlement.civicTier * 0.6);
             for (const [type, entries] of Object.entries(this.lineageMemory.knownResources || {})) {
                 this.colonyKnowledge.resources[type] = clone(entries).slice(0, 8);
             }
@@ -2766,9 +3102,23 @@
         getEraItemTierFloor(type = null) {
             const era = this.getCurrentEra();
             if (era === 'engineering' || era === 'metallurgy' || era === 'bronze age' || era === 'iron age') {
-                if (type === 'basket' || type === 'simpleClothing') {
+                if (type === 'basket' || type === 'simpleClothing' || type === 'furClothing') {
                     return 'standard';
                 }
+                return 'fine';
+            }
+            if (era === 'agriculture' || era === 'masonry') {
+                if (type === 'stick' || type === 'stoneTool') {
+                    return 'crude';
+                }
+                return 'standard';
+            }
+            return 'crude';
+        }
+
+        getEraItemTierCap(type = null) {
+            const era = this.getCurrentEra();
+            if (era === 'engineering' || era === 'metallurgy' || era === 'bronze age' || era === 'iron age') {
                 return 'fine';
             }
             if (era === 'agriculture' || era === 'masonry') {
@@ -2790,6 +3140,7 @@
                 spear: Math.max(2, Math.round(population * 0.35)),
                 basket: Math.max(2, Math.round(population * 0.35)),
                 simpleClothing: Math.max(2, population - 2),
+                furClothing: Math.max(1, Math.round(population * 0.35)),
                 stoneTool: Math.max(2, Math.round(population * 0.25)),
                 stick: 3
             };
@@ -2800,9 +3151,11 @@
                 base.spear = Math.max(base.spear, Math.round(population * 0.55));
                 base.basket = Math.max(base.basket, Math.round(population * 0.45));
                 base.simpleClothing = population;
+                base.furClothing = Math.max(base.furClothing, Math.round(population * 0.55));
             } else if (era === 'agriculture' || era === 'masonry') {
                 base.hoe = Math.max(base.hoe, Math.round(population * 0.45));
                 base.simpleClothing = Math.max(base.simpleClothing, population - 1);
+                base.furClothing = Math.max(base.furClothing, Math.round(population * 0.45));
             }
             return base[type] || 0;
         }
@@ -3042,6 +3395,11 @@
                 raidCooldown: Number.isFinite(colony.raidCooldown) ? colony.raidCooldown : 34 + this.rng() * 14,
                 diplomacyCooldown: Number.isFinite(colony.diplomacyCooldown) ? colony.diplomacyCooldown : 10 + this.rng() * 12,
                 supportCooldown: Number.isFinite(colony.supportCooldown) ? colony.supportCooldown : this.getColonySupportCooldownDuration(colony, colony.type === 'daughter' ? 18 : 12, colony.type === 'daughter' ? 54 : 40),
+                supportRequest: {
+                    food: Boolean(colony.supportRequest?.food),
+                    water: Boolean(colony.supportRequest?.water),
+                    reason: colony.supportRequest?.reason || null
+                },
                 mainCeasefireCooldown: Math.max(0, Number.isFinite(colony.mainCeasefireCooldown) ? colony.mainCeasefireCooldown : 0),
                 resourceScanCooldown: Number.isFinite(colony.resourceScanCooldown) ? colony.resourceScanCooldown : 0,
                 strategicEvalCooldown: Number.isFinite(colony.strategicEvalCooldown) ? colony.strategicEvalCooldown : 0,
@@ -3516,18 +3874,28 @@
                         this.recordFactionEvent(`${party.colonyName} reinforced the ${side === 'attackers' ? 'assault line' : 'battle line'}.`);
                     }
                 }
-                if (party.targetColonyId) {
-                    const targetColony = this.getActiveBranchColonies().find((entry) => entry.id === party.targetColonyId) || null;
-                    if (targetColony) {
-                        if (party.supplies) {
-                            targetColony.food = clamp((targetColony.food || 0) + (party.supplies.food || 0), 0, 140);
-                            targetColony.water = clamp((targetColony.water || 0) + (party.supplies.water || 0), 0, 140);
-                            targetColony.wood = clamp((targetColony.wood || 0) + (party.supplies.wood || 0), 0, 80);
-                            targetColony.stone = clamp((targetColony.stone || 0) + (party.supplies.stone || 0), 0, 70);
-                            targetColony.recentAction = party.supportMode === 'main aid' ? 'receiving aid' : 'receiving convoy';
-                            this.recordFactionEvent(
-                                party.supportMode === 'main aid'
-                                    ? `The main settlement's supply caravan reached ${targetColony.name}.`
+                        if (party.targetColonyId) {
+                            const targetColony = this.getActiveBranchColonies().find((entry) => entry.id === party.targetColonyId) || null;
+                            if (targetColony) {
+                                if (party.supplies) {
+                                    targetColony.food = clamp((targetColony.food || 0) + (party.supplies.food || 0), 0, 140);
+                                    targetColony.water = clamp((targetColony.water || 0) + (party.supplies.water || 0), 0, 140);
+                                    targetColony.wood = clamp((targetColony.wood || 0) + (party.supplies.wood || 0), 0, 80);
+                                    targetColony.stone = clamp((targetColony.stone || 0) + (party.supplies.stone || 0), 0, 70);
+                                    targetColony.supportRequest = targetColony.supportRequest || { food: false, water: false, reason: null };
+                                    if ((party.supplies.food || 0) > 0) {
+                                        targetColony.supportRequest.food = false;
+                                    }
+                                    if ((party.supplies.water || 0) > 0) {
+                                        targetColony.supportRequest.water = false;
+                                    }
+                                    if (!targetColony.supportRequest.food && !targetColony.supportRequest.water) {
+                                        targetColony.supportRequest.reason = null;
+                                    }
+                                    targetColony.recentAction = party.supportMode === 'main aid' ? 'receiving aid' : 'receiving convoy';
+                                    this.recordFactionEvent(
+                                        party.supportMode === 'main aid'
+                                            ? `The main settlement's supply caravan reached ${targetColony.name}.`
                                     : `${party.colonyName}'s convoy reached ${targetColony.name}.`
                             );
                             this.spawnFactionEffect(party);
@@ -4405,8 +4773,10 @@
                 { type: 'water', dx: 0, dy: -95, amount: resourcesConfig.branchStarterNodes.water, biome: 'water', radius: 120 },
                 { type: 'berries', dx: 78, dy: -35, amount: resourcesConfig.branchStarterNodes.berriesNorthEast, biome: 'fertile', radius: 95 },
                 { type: 'berries', dx: -72, dy: 52, amount: resourcesConfig.branchStarterNodes.berriesSouthWest, biome: 'fertile', radius: 95 },
+                { type: 'fallenWood', dx: 64, dy: 40, amount: resourcesConfig.branchStarterNodes.fallenWoodEast, biome: 'forest', radius: 90 },
                 { type: 'trees', dx: -88, dy: 42, amount: resourcesConfig.branchStarterNodes.treesWest, biome: 'forest', radius: 95 },
                 { type: 'trees', dx: 92, dy: 68, amount: resourcesConfig.branchStarterNodes.treesEast, biome: 'forest', radius: 95 },
+                { type: 'looseStone', dx: 76, dy: 18, amount: resourcesConfig.branchStarterNodes.looseStone, biome: 'rocky', radius: 90 },
                 { type: 'stone', dx: 110, dy: 30, amount: resourcesConfig.branchStarterNodes.stone, biome: 'rocky', radius: 105 }
             ];
             for (const placement of placements) {
@@ -4420,7 +4790,11 @@
                 }
                 const x = clamp(colony.x + placement.dx, CELL_WIDTH * (VALLEY_RING_CELLS + 1), this.width - CELL_WIDTH * (VALLEY_RING_CELLS + 1));
                 const y = clamp(colony.y + placement.dy, CELL_HEIGHT * (VALLEY_RING_CELLS + 1), this.height - CELL_HEIGHT * (VALLEY_RING_CELLS + 1));
-                this.resources.push(this.makeResource(this.nextResourceId++, placement.type, x, y, placement.amount, placement.biome));
+                this.placeResourceIfOpen(this.nextResourceId++, placement.type, x, y, placement.amount, placement.biome, {
+                    attempts: 12,
+                    spread: 28,
+                    padding: 8
+                });
             }
         }
 
@@ -4435,6 +4809,10 @@
             this.camp.materials[key] = Math.max(0, this.camp.materials[key] + amount);
         }
 
+        isCampFireLit() {
+            return this.getCampMaterial('logs') >= 0.5;
+        }
+
         consumeCampMaterial(key, amount) {
             if ((this.camp.materials[key] || 0) < amount) {
                 return false;
@@ -4444,7 +4822,13 @@
         }
 
         createCampItem(type, craftingSkill = 0) {
-            const item = createItem(this.nextItemId++, type, craftingSkill, this.getEraItemTierFloor(type));
+            const item = createItem(
+                this.nextItemId++,
+                type,
+                craftingSkill,
+                this.getEraItemTierFloor(type),
+                this.getEraItemTierCap(type)
+            );
             this.camp.items.push(item);
             return item;
         }
@@ -4535,8 +4919,25 @@
             return 1 / (tool.quality || 1);
         }
 
+        canHarvestTrees(colonist) {
+            return colonist?.equipment?.wood?.type === 'axe';
+        }
+
+        canHarvestStoneDeposit(colonist) {
+            return colonist?.equipment?.building?.type === 'hammer';
+        }
+
         getHaulBonus(colonist) {
-            return colonist.equipment.hauling ? 1.35 : 1;
+            const basket = colonist.equipment.hauling;
+            return basket ? Math.max(1.35, basket.quality || 1.35) : 1;
+        }
+
+        getCarryLoadMultiplier(colonist) {
+            const basket = colonist.equipment.hauling;
+            if (!basket) {
+                return 1;
+            }
+            return clamp(1.35 + ((basket.quality || 1) - 1) * 0.65, 1.25, 1.75);
         }
 
         wearTool(colonist, action, amount = 1) {
@@ -4600,7 +5001,6 @@
             this.consumeRecipeInputs(recipe);
             if (recipe.output === 'firePit') {
                 this.camp.structures.firePit += 1;
-                this.camp.fireFuel += 6;
                 this.pushEvent(`${colonist.name} built a fire pit.`);
             } else {
                 const item = this.createCampItem(recipe.output, colonist.skills.crafting);
@@ -4609,6 +5009,9 @@
             colonist.gainSkill('crafting', 1);
             colonist.gainSkill('building', 0.25);
             this.noteDiscovery('skill:tool_use', `${colonist.name} improved the colony's tools.`);
+            if (recipe.output === 'simpleClothing' || recipe.output === 'furClothing') {
+                this.noteDiscovery('skill:cold_weather', `${colonist.name} learned to turn materials into cold-weather clothing.`);
+            }
             return true;
         }
 
@@ -4618,7 +5021,10 @@
             if (!isCapableCrafter && this.countCompletedAction('collectWood') + this.countCompletedAction('collectStone') > 10) {
                 return null;
             }
+            const desiredBuildingToolTier = this.getDesiredBuildingToolTier();
             const enoughTiered = (type) => this.countOwnedItemsAtTier(type, this.getEraItemTierFloor(type)) >= this.getEraEquipmentDemand(type);
+            const enoughBuildingTools = (type) => this.countOwnedItemsAtTier(type, desiredBuildingToolTier) >= Math.max(1, Math.ceil(this.colonists.length * 0.2));
+            const coldSeason = this.getSeason().name === 'Autumn' || this.getSeason().name === 'Winter' || this.getWeather().name === 'Cold Snap';
             const priorities = [
                 { key: 'firePit', when: () => this.camp.structures.firePit < 1 && this.getCampMaterial('logs') >= 2 && this.camp.stone >= 3 },
                 { key: 'stick', when: () => this.countOwnedItems('stick') < 3 && this.getCampMaterial('logs') >= 1 },
@@ -4626,10 +5032,13 @@
                 { key: 'hoe', when: () => this.colonyKnowledge.discoveries.includes('skill:planting') && !colonist.equipment.farming && !enoughTiered('hoe') && this.getCampMaterial('fiber') >= 2 },
                 { key: 'stoneTool', when: () => this.countCampItems('stoneTool') < 2 && this.countCampItems('stick') >= 1 && this.camp.stone >= 1 },
                 { key: 'axe', when: () => !colonist.equipment.wood && !enoughTiered('axe') && (this.countCampItems('stoneTool') > 0 || this.canCraftRecipe('axe')) },
-                { key: 'hammer', when: () => !colonist.equipment.building && !enoughTiered('hammer') && (this.countCampItems('stoneTool') > 0 || this.canCraftRecipe('hammer')) },
+                { key: 'hammer', when: () => !colonist.equipment.building && (!enoughTiered('hammer') || !enoughBuildingTools('hammer')) && (this.countCampItems('stoneTool') > 0 || this.canCraftRecipe('hammer')) },
+                { key: 'furClothing', when: () => coldSeason && this.getCampMaterial('hides') >= 2 && (!colonist.equipment.clothing || colonist.equipment.clothing.type !== 'furClothing') && !enoughTiered('furClothing') },
                 { key: 'basket', when: () => !colonist.equipment.hauling && !enoughTiered('basket') && this.countOwnedItems('axe') >= 1 },
                 { key: 'simpleClothing', when: () => this.getCampMaterial('fiber') >= 3 && !colonist.equipment.clothing && !enoughTiered('simpleClothing') },
+                { key: 'furClothing', when: () => this.getCampMaterial('hides') >= 2 && this.countOwnedItemsAtTier('furClothing', this.getEraItemTierFloor('furClothing')) < this.getEraEquipmentDemand('furClothing') },
                 { key: 'simpleClothing', when: () => this.getCampMaterial('fiber') >= 3 && this.countOwnedItemsAtTier('simpleClothing', this.getEraItemTierFloor('simpleClothing')) < this.colonists.length },
+                { key: 'hammer', when: () => !enoughBuildingTools('hammer') && (this.countCampItems('stoneTool') > 0 || this.canCraftRecipe('hammer')) },
                 { key: 'spear', when: () => this.getCampMaterial('rope') >= 1 && this.countOwnedItemsAtTier('spear', this.getEraItemTierFloor('spear')) < this.getEraEquipmentDemand('spear') }
             ];
             return priorities.find((entry) => entry.when() && this.canCraftRecipe(entry.key) && this.canPursueRecipe(entry.key, colonist))?.key || null;
@@ -4692,12 +5101,16 @@
                 hunting: ['spear'],
                 building: ['hammer'],
                 farming: ['hoe'],
-                clothing: ['simpleClothing']
+                clothing: ['furClothing', 'simpleClothing']
             };
             for (const slot of desired) {
                 const equipped = colonist.equipment[slot];
                 const preferredTypes = preferredBySlot[slot];
-                const minTier = this.getEraItemTierFloor(preferredTypes[0]);
+                const minTier = slot === 'building'
+                    ? (getTierRank(this.getDesiredBuildingToolTier()) > getTierRank(this.getEraItemTierFloor(preferredTypes[0]))
+                        ? this.getDesiredBuildingToolTier()
+                        : this.getEraItemTierFloor(preferredTypes[0]))
+                    : this.getEraItemTierFloor(preferredTypes[0]);
                 const equippedRank = equipped ? getTierRank(equipped.tier) : -1;
                 const isUsable = equipped && (equipped.maxDurability <= 0 || equipped.durability > equipped.maxDurability * 0.25);
                 if (equipped && isUsable && equippedRank >= getTierRank(minTier)) {
@@ -4752,7 +5165,7 @@
         }
 
         buildDrinkPlan(colonist) {
-            if (this.camp.water > 4) {
+            if (this.camp.water > 0.5) {
                 return [{ kind: 'camp', duration: 1.4, action: 'drinkCamp' }];
             }
             const source = this.findNearestResource(colonist, 'water');
@@ -4763,7 +5176,11 @@
         }
 
         buildWaterHaulPlan(colonist) {
-            if (this.camp.water >= 12) {
+            const carryPlan = this.buildCarryDeliveryPlan(colonist);
+            if (carryPlan) {
+                return carryPlan;
+            }
+            if (this.camp.water >= this.getDesiredWaterReserve()) {
                 return null;
             }
             const source = this.findNearestResource(colonist, 'water');
@@ -4781,7 +5198,7 @@
         }
 
         buildEatPlan(colonist) {
-            if (this.camp.food > 2.5) {
+            if (this.camp.food > 0.5) {
                 return [{ kind: 'camp', duration: 1.8, action: 'eatCamp' }];
             }
             const source = this.findBestFoodSource(colonist, {
@@ -4812,10 +5229,10 @@
 
         buildWarmPlan(colonist) {
             const home = this.getSleepSite(colonist);
-            if (home !== this.camp && this.camp.fireFuel <= 0) {
+            if (home !== this.camp && !this.isCampFireLit()) {
                 return [{ kind: 'resource', entity: home, duration: 2.4, action: 'warmHome' }];
             }
-            if (this.camp.fireFuel > 0) {
+            if (this.isCampFireLit()) {
                 return [{ kind: 'camp', duration: 2.8, action: 'warmCamp' }];
             }
             const shelter = this.findBestShelterSpot(colonist);
@@ -4863,12 +5280,76 @@
             ];
         }
 
-        buildTendPlan() {
-            return [{ kind: 'camp', duration: 2.4, action: 'tendWounds' }];
+        findColonistNeedingAid(helper) {
+            return this.colonists
+                .filter((entry) =>
+                    entry !== helper &&
+                    entry.alive &&
+                    distance(entry, helper) < 150 &&
+                    (
+                        entry.stats.health < 74 ||
+                        (entry.woundSeverity || 0) > 0.22 ||
+                        entry.stats.energy < 28 ||
+                        entry.stats.hunger < 30 ||
+                        entry.stats.thirst < 30 ||
+                        entry.stats.warmth < 32 ||
+                        entry.stats.morale < 42 ||
+                        (entry.emotionalMemory?.griefLoad || 0) > 0.35
+                    )
+                )
+                .sort((left, right) => {
+                    const leftSeverity = (100 - left.stats.health) * 0.7 + (left.woundSeverity || 0) * 40 + Math.max(0, 38 - left.stats.energy) * 0.65 + Math.max(0, 38 - left.stats.hunger) * 0.58 + Math.max(0, 38 - left.stats.thirst) * 0.72 + Math.max(0, 40 - left.stats.warmth) * 0.62 + (50 - left.stats.morale) * 0.35;
+                    const rightSeverity = (100 - right.stats.health) * 0.7 + (right.woundSeverity || 0) * 40 + Math.max(0, 38 - right.stats.energy) * 0.65 + Math.max(0, 38 - right.stats.hunger) * 0.58 + Math.max(0, 38 - right.stats.thirst) * 0.72 + Math.max(0, 40 - right.stats.warmth) * 0.62 + (50 - right.stats.morale) * 0.35;
+                    const leftBond = helper.relationships.friends[left.id] || 0;
+                    const rightBond = helper.relationships.friends[right.id] || 0;
+                    return (rightSeverity - leftSeverity) || (rightBond - leftBond) || (distance(helper, left) - distance(helper, right));
+                })[0] || null;
+        }
+
+        getTendIntentScore(colonist) {
+            const selfNeed =
+                clamp(96 - colonist.stats.health, 0, 40) * 1.6 +
+                (colonist.stats.health < 86 ? 20 : 0) +
+                this.getActionConfidence(colonist, 'tend') * 10 +
+                this.getTraitDecisionBias(colonist, 'tend');
+            const ally = this.findColonistNeedingAid(colonist);
+            if (!ally) {
+                return selfNeed;
+            }
+            const bond = colonist.relationships.friends[ally.id] || 0;
+            const aidNeed =
+                16 +
+                Math.max(0, 84 - ally.stats.health) * 0.8 +
+                Math.max(0, 36 - ally.stats.energy) * 0.55 +
+                Math.max(0, 36 - ally.stats.hunger) * 0.5 +
+                Math.max(0, 36 - ally.stats.thirst) * 0.65 +
+                Math.max(0, 38 - ally.stats.warmth) * 0.55 +
+                Math.max(0, 46 - ally.stats.morale) * 0.45 +
+                (ally.woundSeverity || 0) * 26 +
+                bond * 2.2 +
+                this.getRoleBias(colonist, 'helper') * 12 +
+                this.getActionConfidence(colonist, 'tend') * 10 +
+                this.getTraitDecisionBias(colonist, 'tend');
+            return Math.max(selfNeed, aidNeed);
+        }
+
+        buildTendPlan(colonist) {
+            if (colonist.stats.health < 88 || (colonist.woundSeverity || 0) > 0.14) {
+                return [{ kind: 'camp', duration: 2.4, action: 'tendWounds' }];
+            }
+            const peer = this.findColonistNeedingAid(colonist);
+            if (!peer) {
+                return null;
+            }
+            return [{ kind: 'resource', entity: peer, duration: 2.1, action: 'aidPeer' }];
         }
 
         buildForagePlan(colonist) {
-            if (this.camp.food >= 14) {
+            const carryPlan = this.buildCarryDeliveryPlan(colonist);
+            if (carryPlan) {
+                return carryPlan;
+            }
+            if (this.camp.food >= this.getDesiredFoodReserve()) {
                 return null;
             }
             const source = this.findBestFoodSource(colonist, {
@@ -4889,17 +5370,22 @@
         }
 
         buildWoodPlan(colonist) {
-            if (this.getWoodShortfall() <= 0 && this.getConstructionMaterialNeed('wood') <= 0 && this.camp.fireFuel >= 10) {
+            const carryPlan = this.buildCarryDeliveryPlan(colonist);
+            if (carryPlan) {
+                return carryPlan;
+            }
+            if (this.getWoodShortfall() <= 0 && this.getConstructionMaterialNeed('wood') <= 0 && this.getCampMaterial('logs') >= 8) {
                 return null;
             }
-            const trees = this.findNearestResource(colonist, 'trees');
-            if (!trees) {
+            const fallenWood = this.findNearestResource(colonist, 'fallenWood');
+            const source = fallenWood || (this.canHarvestTrees(colonist) ? this.findNearestResource(colonist, 'trees') : null);
+            if (!source) {
                 this.recordFailedAction(colonist, 'collectWood');
                 return null;
             }
             const stockpileSite = this.getStockpileSite();
             return [
-                { kind: 'resource', entity: trees, duration: this.getActionDuration(colonist, 'building', 3.4, 'collectWood'), action: 'collectWood' },
+                { kind: 'resource', entity: source, duration: this.getActionDuration(colonist, 'building', source.type === 'fallenWood' ? 2.2 : 3.6, 'collectWood'), action: 'collectWood' },
                 stockpileSite === this.camp
                     ? { kind: 'camp', duration: 0.8, action: 'deliverWood' }
                     : { kind: 'resource', entity: stockpileSite, duration: 0.8, action: 'deliverWood' }
@@ -4907,17 +5393,22 @@
         }
 
         buildStonePlan(colonist) {
+            const carryPlan = this.buildCarryDeliveryPlan(colonist);
+            if (carryPlan) {
+                return carryPlan;
+            }
             if (this.getStoneShortfall() <= 0 && this.getConstructionMaterialNeed('stone') <= 0) {
                 return null;
             }
-            const stone = this.findNearestResource(colonist, 'stone');
-            if (!stone) {
+            const looseStone = this.findNearestResource(colonist, 'looseStone');
+            const source = looseStone || (this.canHarvestStoneDeposit(colonist) ? this.findNearestResource(colonist, 'stone') : null);
+            if (!source) {
                 this.recordFailedAction(colonist, 'collectStone');
                 return null;
             }
             const stockpileSite = this.getStockpileSite();
             return [
-                { kind: 'resource', entity: stone, duration: this.getActionDuration(colonist, 'building', 3.6, 'collectStone'), action: 'collectStone' },
+                { kind: 'resource', entity: source, duration: this.getActionDuration(colonist, 'building', source.type === 'looseStone' ? 2.1 : 3.8, 'collectStone'), action: 'collectStone' },
                 stockpileSite === this.camp
                     ? { kind: 'camp', duration: 0.8, action: 'deliverStone' }
                     : { kind: 'resource', entity: stockpileSite, duration: 0.8, action: 'deliverStone' }
@@ -4925,6 +5416,10 @@
         }
 
         buildHuntPlan(colonist) {
+            const carryPlan = this.buildCarryDeliveryPlan(colonist);
+            if (carryPlan) {
+                return carryPlan;
+            }
             const craftSpearFirst = !colonist.equipment.hunting && this.canCraftRecipe('spear') && this.canPursueRecipe('spear', colonist);
             const animal = this.findNearestAnimal(colonist, { preferYield: true });
             if (!animal) {
@@ -4973,7 +5468,7 @@
         }
 
         buildPlantTrialPlan(colonist) {
-            const plot = this.findPlantingSpot();
+            const plot = this.findPlantingSpot(colonist);
             if (!plot) {
                 return null;
             }
@@ -5057,6 +5552,16 @@
         }
 
         buildRestPlan(colonist) {
+            if (colonist.stats.health < 42 || colonist.stats.energy < 34) {
+                const shelter = this.findBestShelterSpot(colonist);
+                if (shelter && distance(shelter, this.camp) > 16) {
+                    return [
+                        { kind: 'wander', x: shelter.x, y: shelter.y, duration: 0.8, action: 'seekShelter' },
+                        { kind: 'camp', duration: 2.2, action: 'restCamp' }
+                    ];
+                }
+                return [{ kind: 'camp', duration: 2.2, action: 'restCamp' }];
+            }
             return [{
                 kind: 'wander',
                 x: clamp(colonist.x + Math.cos(colonist.roamAngle) * 55, 20, this.width - 20),
@@ -5143,55 +5648,108 @@
                         ? this.cells[(cell.row + 1) * GRID_COLS + (cell.col + 1)]
                         : null;
                     const isWaterClusterAnchor = right?.biome === 'water' && down?.biome === 'water' && downRight?.biome === 'water';
-                    if (isWaterClusterAnchor) {
-                        this.resources.push(this.makeResource(
+                    const sparseWaterAnchor = ((cell.col + cell.row * 2) % 3) === 0;
+                    if (isWaterClusterAnchor && sparseWaterAnchor) {
+                        this.placeResourceIfOpen(
                             id++,
                             'water',
                             cell.x + CELL_WIDTH,
                             cell.y + CELL_HEIGHT,
                             resourcesConfig.naturalNodes.waterClusterAmount,
-                            cell.biome
-                        ));
+                            cell.biome,
+                            { attempts: 8, spread: 28, padding: 12 }
+                        );
                     }
                     continue;
                 }
                 if ((cell.biome === 'fertile' || cell.biome === 'forest') && this.rng() < 0.18) {
-                    this.resources.push(this.makeResource(
+                    this.placeResourceIfOpen(
                         id++,
                         'berries',
                         x,
                         y,
                         resourcesConfig.naturalNodes.berriesBase + this.rng() * resourcesConfig.naturalNodes.berriesVariance,
-                        cell.biome
-                    ));
+                        cell.biome,
+                        { attempts: 8, spread: 24 }
+                    );
+                }
+                const nearbyTreeCell = cell.biome === 'forest' || this.getNeighborCells(cell).some((neighbor) => neighbor.biome === 'forest');
+                if (nearbyTreeCell && this.rng() < (cell.biome === 'forest' ? 0.07 : 0.025)) {
+                    this.placeResourceIfOpen(
+                        id++,
+                        'fallenWood',
+                        x - 4,
+                        y + 4,
+                        resourcesConfig.naturalNodes.fallenWoodBase + this.rng() * resourcesConfig.naturalNodes.fallenWoodVariance,
+                        cell.biome,
+                        { attempts: 8, spread: 22 }
+                    );
                 }
                 if ((cell.biome === 'forest' || cell.biome === 'fertile') && this.rng() < 0.16) {
-                    this.resources.push(this.makeResource(
+                    this.placeResourceIfOpen(
                         id++,
                         'trees',
                         x + 6,
                         y - 4,
                         resourcesConfig.naturalNodes.treesBase + this.rng() * resourcesConfig.naturalNodes.treesVariance,
-                        cell.biome
-                    ));
+                        cell.biome,
+                        { attempts: 8, spread: 28, padding: 12 }
+                    );
+                }
+                const nearRockyCell = cell.biome === 'rocky' || this.getNeighborCells(cell).some((neighbor) => neighbor.biome === 'rocky');
+                if (nearRockyCell && this.rng() < (cell.biome === 'rocky' ? 0.06 : 0.018)) {
+                    this.placeResourceIfOpen(
+                        id++,
+                        'looseStone',
+                        x + 8,
+                        y + 10,
+                        resourcesConfig.naturalNodes.looseStoneBase + this.rng() * resourcesConfig.naturalNodes.looseStoneVariance,
+                        cell.biome,
+                        { attempts: 8, spread: 22 }
+                    );
                 }
                 if (cell.biome === 'rocky' && this.rng() < 0.14) {
-                    this.resources.push(this.makeResource(
+                    this.placeResourceIfOpen(
                         id++,
                         'stone',
                         x - 10,
                         y + 6,
                         resourcesConfig.naturalNodes.stoneBase + this.rng() * resourcesConfig.naturalNodes.stoneVariance,
-                        cell.biome
-                    ));
+                        cell.biome,
+                        { attempts: 8, spread: 28, padding: 12 }
+                    );
                 }
                 if ((cell.biome === 'grassland' || cell.biome === 'fertile') && this.rng() < 0.05) {
-                    this.animals.push(this.makeAnimal(id++, x, y, cell.biome));
+                    this.placeAnimalIfOpen(id++, x, y, cell.biome, { attempts: 8, spread: 28 });
                 }
                 if (cell.biome === 'forest' && this.rng() < 0.035) {
-                    this.predators.push(this.makePredator(id++, x, y, cell.biome));
+                    this.placePredatorIfOpen(id++, x, y, cell.biome, { attempts: 8, spread: 28 });
                 }
             }
+        }
+
+        getNeighborCells(cell) {
+            if (!cell) {
+                return [];
+            }
+            const neighbors = [];
+            for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+                for (let colOffset = -1; colOffset <= 1; colOffset += 1) {
+                    if (rowOffset === 0 && colOffset === 0) {
+                        continue;
+                    }
+                    const col = cell.col + colOffset;
+                    const row = cell.row + rowOffset;
+                    if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) {
+                        continue;
+                    }
+                    const neighbor = this.cells[row * GRID_COLS + col];
+                    if (neighbor) {
+                        neighbors.push(neighbor);
+                    }
+                }
+            }
+            return neighbors;
         }
 
         ensureStarterResources() {
@@ -5201,8 +5759,10 @@
                 { type: 'berries', dx: 72, dy: -42, amount: resourcesConfig.starterNodes.berriesNear, biome: 'fertile' },
                 { type: 'berries', dx: 120, dy: -65, amount: resourcesConfig.starterNodes.berriesFar, biome: 'fertile' },
                 { type: 'berries', dx: -110, dy: 80, amount: resourcesConfig.starterNodes.berriesSouth, biome: 'fertile' },
+                { type: 'fallenWood', dx: 95, dy: 42, amount: resourcesConfig.starterNodes.fallenWoodEast, biome: 'forest' },
                 { type: 'trees', dx: 150, dy: 95, amount: resourcesConfig.starterNodes.treesEast, biome: 'forest' },
                 { type: 'trees', dx: -150, dy: -90, amount: resourcesConfig.starterNodes.treesWest, biome: 'forest' },
+                { type: 'looseStone', dx: 118, dy: -8, amount: resourcesConfig.starterNodes.looseStone, biome: 'rocky' },
                 { type: 'stone', dx: 185, dy: -25, amount: resourcesConfig.starterNodes.stone, biome: 'rocky' }
             ];
             let id = this.resources.length + this.animals.length + 1000;
@@ -5213,7 +5773,11 @@
                     resource.type === placement.type && distance(resource, { x, y }) < 40
                 );
                 if (!existing) {
-                    this.resources.push(this.makeResource(id++, placement.type, x, y, placement.amount, placement.biome));
+                    this.placeResourceIfOpen(id++, placement.type, x, y, placement.amount, placement.biome, {
+                        attempts: 14,
+                        spread: 24,
+                        padding: 8
+                    });
                 }
             }
             const animalPlacements = [
@@ -5225,7 +5789,7 @@
                 const y = clamp(this.camp.y + placement.dy, 30, this.height - 30);
                 const existingAnimal = this.animals.find((animal) => !animal.depleted && distance(animal, { x, y }) < 55);
                 if (!existingAnimal) {
-                    this.animals.push(this.makeAnimal(id++, x, y, placement.biome));
+                    this.placeAnimalIfOpen(id++, x, y, placement.biome, { attempts: 12, spread: 28 });
                 }
             }
             const predatorOffsetX = 120 + predatorCaution * 80;
@@ -5234,12 +5798,13 @@
                 distance(predator, { x: this.camp.x + predatorOffsetX, y: this.camp.y + predatorOffsetY }) < 90
             );
             if (!nearbyPredator && predatorCaution < 3) {
-                this.predators.push(this.makePredator(
+                this.placePredatorIfOpen(
                     id++,
                     clamp(this.camp.x + predatorOffsetX, 30, this.width - 30),
                     clamp(this.camp.y + predatorOffsetY, 30, this.height - 30),
-                    'forest'
-                ));
+                    'forest',
+                    { attempts: 12, spread: 36 }
+                );
             }
         }
 
@@ -5248,8 +5813,12 @@
                 ? 0.42
                 : type === 'water'
                     ? 0.36
+                    : type === 'fallenWood'
+                        ? 0.28
                     : type === 'trees'
                         ? 0.34
+                        : type === 'looseStone'
+                            ? 0.24
                         : 0.3;
             return {
                 id,
@@ -5259,6 +5828,8 @@
                 amount,
                 maxAmount: amount,
                 biome,
+                displayName: RESOURCE_DISPLAY_NAMES[type] || type,
+                discoveryKey: RESOURCE_DISCOVERY_KEYS[type] || `resource:${type}`,
                 depleted: false,
                 respawnDelay: RESOURCE_RESPAWN_MIN + this.rng() * (RESOURCE_RESPAWN_MAX - RESOURCE_RESPAWN_MIN),
                 respawnTimer: 0,
@@ -5268,7 +5839,9 @@
 
         trySpawnNaturalResource(type) {
             const biomeByType = {
+                fallenWood: ['forest'],
                 trees: ['forest', 'fertile'],
+                looseStone: ['rocky'],
                 stone: ['rocky'],
                 water: ['water']
             };
@@ -5283,19 +5856,32 @@
                 }
                 const x = cell.x + CELL_WIDTH * (0.25 + this.rng() * 0.5);
                 const y = cell.y + CELL_HEIGHT * (0.25 + this.rng() * 0.5);
+                if (type === 'water' && ((cell.col + cell.row * 2) % 4) !== 0) {
+                    continue;
+                }
                 const nearby = this.resources.find((resource) =>
-                    resource.type === type && distance(resource, { x, y }) < (type === 'water' ? 95 : 55)
+                    resource.type === type && distance(resource, { x, y }) < (type === 'water' ? 150 : 55)
                 );
                 if (nearby) {
                     continue;
                 }
                 const amount = type === 'trees'
                     ? 18 + this.rng() * 14
+                    : type === 'fallenWood'
+                        ? 8 + this.rng() * 8
                     : type === 'stone'
                         ? 14 + this.rng() * 10
+                        : type === 'looseStone'
+                            ? 6 + this.rng() * 6
                         : 36 + this.rng() * 28;
-                this.resources.push(this.makeResource(this.nextResourceId++, type, x, y, amount, cell.biome));
-                return true;
+                const placed = this.placeResourceIfOpen(this.nextResourceId++, type, x, y, amount, cell.biome, {
+                    attempts: 8,
+                    spread: type === 'water' ? 42 : 28,
+                    padding: type === 'water' || type === 'trees' || type === 'stone' ? 12 : 8
+                });
+                if (placed) {
+                    return true;
+                }
             }
             return false;
         }
@@ -5671,17 +6257,24 @@
             for (const role of Object.keys(this.recentLabor)) {
                 this.recentLabor[role] = Math.max(0, this.recentLabor[role] - dt * 0.02);
             }
-            this.camp.fireFuel = clamp(this.camp.fireFuel - dt * (0.14 + Math.max(0, -season.temperature) * 0.008 + (weather.name === 'Cold Snap' ? 0.12 : 0)) * firePitEfficiency, 0, 999);
+            if (this.getCampMaterial('logs') > 0) {
+                const seasonFuelPressure = season.name === 'Winter' ? 0.036 : season.name === 'Autumn' ? 0.014 : 0;
+                const logBurnRate = (0.055 + Math.max(0, -season.temperature) * 0.0045 + seasonFuelPressure + (weather.name === 'Cold Snap' ? 0.036 : 0)) * firePitEfficiency;
+                const burnedLogs = Math.min(this.getCampMaterial('logs'), dt * logBurnRate);
+                if (burnedLogs > 0) {
+                    this.consumeCampMaterial('logs', burnedLogs);
+                }
+            }
             this.camp.water = clamp(this.camp.water - dt * (0.05 + (weather.name === 'Drought' ? 0.05 : 0)), 0, 999);
             if (weather.name === 'Rain' || weather.name === 'Storm') {
                 this.camp.water = clamp(this.camp.water + dt * (weather.name === 'Storm' ? 0.24 : 0.14), 0, 999);
             }
             const spoilage = Math.min(this.camp.food, dt * this.getFoodSpoilageRate());
             this.camp.food = clamp(this.camp.food - spoilage, 0, 999);
-            if (this.camp.wood > 0 && this.camp.fireFuel < 10 && this.camp.shelter > 18) {
+            if (this.camp.wood > 0 && this.getCampMaterial('logs') <= 0 && this.camp.shelter > 18) {
                 const used = Math.min(this.camp.wood, dt * 0.45);
                 this.camp.wood -= used;
-                this.camp.fireFuel += used * 1.2;
+                this.addCampMaterial('logs', used * 0.65);
             }
             const advancedStoneDemand =
                 (this.hasTechnology('masonry') ? 4 : 0) +
@@ -5718,7 +6311,19 @@
             const soilFactor = clamp(ecology.soilHealth || 1, 0.35, 1.15);
             const abundance = this.getSimulationKnob('resourceAbundance');
             for (const resource of this.resources) {
+                if (resource.removedByBuildSite) {
+                    resource.depleted = true;
+                    resource.amount = 0;
+                    resource.respawnTimer = 999999;
+                    continue;
+                }
                 if (resource.depleted) {
+                    if (this.isNoResourceTerrainBlocked(resource.x, resource.y, this.getResourcePlacementRadius(resource.type))) {
+                        resource.amount = 0;
+                        resource.respawnTimer = 999999;
+                        resource.removedByBuildSite = true;
+                        continue;
+                    }
                     resource.respawnTimer = Math.max(0, (resource.respawnTimer || 0) - dt);
                     if (resource.respawnTimer > 0) {
                         continue;
@@ -5730,9 +6335,17 @@
                     const growth = dt * 0.18 * season.berryGrowth * Math.max(0.3, 1 + weather.moisture) * fertilityFactor * soilFactor * blightPenalty * abundance;
                     resource.amount = clamp(resource.amount + growth, 0, resource.maxAmount);
                     resource.depleted = resource.amount <= 0.05;
+                } else if (resource.type === 'fallenWood') {
+                    const drift = dt * 0.016 * Math.max(0.7, rainfallFactor) * abundance;
+                    resource.amount = clamp(resource.amount + drift, 0, resource.maxAmount);
+                    resource.depleted = resource.amount <= 0.05;
                 } else if (resource.type === 'trees') {
                     const regrowth = dt * 0.028 * Math.max(0.35, 1 + weather.moisture) * rainfallFactor * abundance;
                     resource.amount = clamp(resource.amount + regrowth, 0, resource.maxAmount);
+                    resource.depleted = resource.amount <= 0.05;
+                } else if (resource.type === 'looseStone') {
+                    const drift = dt * 0.01 * (weather.name === 'Storm' ? 1.2 : 1) * Math.max(0.68, 1 - this.phase9.terraforming.quarryMountains * 0.02) * abundance;
+                    resource.amount = clamp(resource.amount + drift, 0, resource.maxAmount);
                     resource.depleted = resource.amount <= 0.05;
                 } else if (resource.type === 'stone') {
                     const regrowth = dt * 0.014 * (weather.name === 'Storm' ? 1.15 : 1) * Math.max(0.72, 1 - this.phase9.terraforming.quarryMountains * 0.03) * abundance;
@@ -5831,10 +6444,18 @@
                             const gathered = Math.min(resource.amount, dt * 0.07);
                             resource.amount = Math.max(0, resource.amount - gathered);
                             waterGain += gathered * 0.9;
+                        } else if (resource.type === 'fallenWood') {
+                            const gathered = Math.min(resource.amount, dt * 0.05);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            colony.wood = clamp((colony.wood || 0) + gathered * 0.48, 0, 80);
                         } else if (resource.type === 'trees') {
                             const gathered = Math.min(resource.amount, dt * 0.045);
                             resource.amount = Math.max(0, resource.amount - gathered);
                             colony.wood = clamp((colony.wood || 0) + gathered * 0.55, 0, 80);
+                        } else if (resource.type === 'looseStone') {
+                            const gathered = Math.min(resource.amount, dt * 0.04);
+                            resource.amount = Math.max(0, resource.amount - gathered);
+                            colony.stone = clamp((colony.stone || 0) + gathered * 0.38, 0, 70);
                         } else if (resource.type === 'stone') {
                             const gathered = Math.min(resource.amount, dt * 0.03);
                             resource.amount = Math.max(0, resource.amount - gathered);
@@ -5847,6 +6468,25 @@
                 });
                 colony.food = clamp((colony.food || 10) + foodGain - dt * (0.055 + colony.population * 0.01), 0, 140);
                 colony.water = clamp((colony.water || 8) + waterGain - dt * (0.06 + colony.population * 0.012), 0, 140);
+                colony.supportRequest = colony.supportRequest || { food: false, water: false, reason: null };
+                const needsFoodSupport = colony.food < Math.max(6, colony.population * 1.35);
+                const needsWaterSupport = colony.water < Math.max(6, colony.population * 1.2);
+                if (needsFoodSupport || needsWaterSupport) {
+                    colony.supportRequest.food = needsFoodSupport;
+                    colony.supportRequest.water = needsWaterSupport;
+                    colony.supportRequest.reason = needsFoodSupport && needsWaterSupport
+                        ? 'food and water shortage'
+                        : needsFoodSupport
+                            ? 'food shortage'
+                            : 'water shortage';
+                    if (colony.recentAction === 'watching' || colony.recentAction === 'trading') {
+                        colony.recentAction = 'requesting support';
+                    }
+                } else if ((colony.supportRequest.food || colony.supportRequest.water) && colony.food > Math.max(10, colony.population * 1.9) && colony.water > Math.max(10, colony.population * 1.7)) {
+                    colony.supportRequest.food = false;
+                    colony.supportRequest.water = false;
+                    colony.supportRequest.reason = null;
+                }
                 if (colony.strategicEvalCooldown <= 0) {
                     timeBranch('diplomacy', () => {
                         this.updateFactionDiplomacy(colony, dt, branchContext);
@@ -6665,22 +7305,39 @@
                     effectLabel: 'Aid'
                 });
                 traded = true;
-            } else if (this.camp.food > 40 && colony.food < 8) {
-                const amount = Math.min(3, this.camp.food - 34);
-                this.camp.food -= amount;
-                colony.food += amount;
-                this.recordFactionEvent(`The main camp sent food to ${colony.name}.`);
-                this.spawnFactionParty(colony, 'trade', 'fromCamp', {
-                    strength: Math.max(1, amount / 2),
-                    status: 'relief caravan',
-                    effectLabel: 'Relief',
-                    targetKind: 'colony'
-                });
-                traded = true;
+            } else if (
+                this.camp.food > this.getAutoAidFoodThreshold() &&
+                colony.food < 8 &&
+                this.getStockpilePressure() < 1.25 &&
+                Boolean(colony.supportRequest?.food)
+            ) {
+                const amount = Math.min(2, this.camp.food - this.getAutoAidFoodThreshold());
+                if (amount > 0) {
+                    this.camp.food -= amount;
+                    colony.food += amount;
+                    this.recordFactionEvent(`The main camp sent food to ${colony.name}.`);
+                    this.spawnFactionParty(colony, 'trade', 'fromCamp', {
+                        strength: Math.max(1, amount / 2),
+                        status: 'relief caravan',
+                        effectLabel: 'Relief',
+                        targetKind: 'colony'
+                    });
+                    colony.supportRequest.food = false;
+                    if (!colony.supportRequest.water) {
+                        colony.supportRequest.reason = null;
+                    }
+                    traded = true;
+                }
             } else if (this.hasTechnology('toolmaking') && this.countCampItems('stoneTool') < 2 && colony.wood > 7 && colony.stone > 5) {
                 colony.wood -= 2;
                 colony.stone -= 2;
-                this.camp.items.push(createItem(this.nextItemId++, 'stoneTool', 1 + colony.factionIdentity.tradeTendency * 2));
+                this.camp.items.push(createItem(
+                    this.nextItemId++,
+                    'stoneTool',
+                    1 + colony.factionIdentity.tradeTendency * 2,
+                    this.getEraItemTierFloor('stoneTool'),
+                    this.getEraItemTierCap('stoneTool')
+                ));
                 this.recordFactionEvent(`${colony.name} traded a stone tool to the main settlement.`);
                 this.spawnFactionParty(colony, 'trade', 'toCamp', {
                     strength: 1.2,
@@ -6981,8 +7638,6 @@
                 });
                 if (this.colonists.length < 18) {
                     this.addColonist();
-                } else {
-                    this.camp.food = Math.max(0, this.camp.food - 1.5);
                 }
                 colony.recentAction = 'sending refugees';
                 return;
@@ -7113,7 +7768,7 @@
                 predator.retreatTimer = Math.max(0, predator.retreatTimer - dt);
                 predator.scanCooldown = Math.max(0, (predator.scanCooldown || 0) - dt);
                 const nearCamp = distance(predator, this.camp) < (120 + predatorCaution * 30);
-                const campDeterrence = nearCamp && this.camp.fireFuel > 8 ? 1 + predatorCaution * 0.6 : 0;
+                const campDeterrence = nearCamp && this.isCampFireLit() ? 1 + predatorCaution * 0.6 : 0;
                 let target = this.colonists.find((colonist) =>
                     colonist.alive && colonist.id === predator.targetColonistId
                 ) || null;
@@ -7175,6 +7830,43 @@
             }
         }
 
+        getActionEnergyDrainRate(action) {
+            const rates = {
+                collectWater: 0.18,
+                collectFood: 0.32,
+                eatAndGatherFood: 0.28,
+                collectWood: 0.72,
+                collectStone: 0.78,
+                huntAnimal: 0.95,
+                huntMeal: 0.9,
+                attackPredator: 1.05,
+                battleEngage: 1.15,
+                clearProjectSite: 0.68,
+                clearProjectTile: 0.52,
+                buildStructure: 0.42,
+                pickupProjectMaterial: 0.22,
+                deliverProjectMaterial: 0.2,
+                harvestCrop: 0.36,
+                processMaterials: 0.3
+            };
+            return rates[action] || 0;
+        }
+
+        applyActiveWorkFatigue(colonist, action, dt) {
+            const baseRate = this.getActionEnergyDrainRate(action);
+            if (baseRate <= 0 || !colonist?.alive || colonist.state === 'sleeping') {
+                return;
+            }
+            const weatherState = this.getWeatherStateAt(colonist.x, colonist.y);
+            const enduranceReduction = 1 - (colonist.traits.endurance || 0) * 0.22;
+            const weatherMultiplier = 1 + weatherState.movementPenalty * 0.45;
+            colonist.stats.energy = clamp(
+                colonist.stats.energy - dt * baseRate * enduranceReduction * weatherMultiplier,
+                0,
+                100
+            );
+        }
+
         completeIntent(colonist, target) {
             const failedBefore = Object.values(colonist.memory.failedActions || {}).reduce((sum, value) => sum + value, 0);
             this.recordCompletedAction(target.action);
@@ -7183,6 +7875,7 @@
                     if (this.camp.water > 0.5) {
                         this.camp.water = Math.max(0, this.camp.water - 1);
                         colonist.stats.thirst = 100;
+                        colonist.stats.energy = clamp(colonist.stats.energy + 3, 0, 100);
                     }
                     break;
                 case 'drinkSource':
@@ -7192,6 +7885,7 @@
                             this.triggerRespawnCooldown(target.entity);
                         }
                         colonist.stats.thirst = 100;
+                        colonist.stats.energy = clamp(colonist.stats.energy + 2, 0, 100);
                         colonist.gainSkill('survival', 0.3);
                     } else {
                         this.recordFailedAction(colonist, 'drinkSource');
@@ -7199,12 +7893,13 @@
                     break;
                 case 'collectWater':
                     if (target.entity && !target.entity.depleted && target.entity.amount > 0.2) {
-                        const haul = Math.min(5, target.entity.amount);
+                        const haul = Math.min(5 * this.getCarryLoadMultiplier(colonist), target.entity.amount);
                         target.entity.amount = Math.max(0, target.entity.amount - haul);
                         if (target.entity.amount <= 0.05) {
                             this.triggerRespawnCooldown(target.entity);
                         }
                         colonist.stats.thirst = 100;
+                        colonist.stats.energy = clamp(colonist.stats.energy + 2, 0, 100);
                         colonist.carrying.type = 'water';
                         colonist.carrying.amount = haul;
                         colonist.gainSkill('survival', 0.45);
@@ -7216,13 +7911,16 @@
                 case 'deliverWater':
                     this.camp.water = clamp(this.camp.water + colonist.carrying.amount, 0, 999);
                     this.noteStorageDelivery(target);
+                    this.recordSocialDrift(colonist, { helpfulness: 0.016, selfishness: -0.008 });
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
+                    colonist.carrying.projectId = null;
                     break;
                 case 'eatCamp':
                     if (this.camp.food > 0.5) {
                         this.camp.food = Math.max(0, this.camp.food - 1.5);
-                        colonist.stats.hunger = clamp(colonist.stats.hunger + 52, 0, 100);
+                        colonist.stats.hunger = clamp(colonist.stats.hunger + 68, 0, 100);
+                        colonist.stats.energy = clamp(colonist.stats.energy + 5, 0, 100);
                     }
                     break;
                 case 'eatWild':
@@ -7232,6 +7930,7 @@
                             this.triggerRespawnCooldown(target.entity);
                         }
                         colonist.stats.hunger = clamp(colonist.stats.hunger + 24, 0, 100);
+                        colonist.stats.energy = clamp(colonist.stats.energy + 2, 0, 100);
                         this.recordFoodSource('foraged', 2);
                         colonist.gainSkill('foraging', 0.35);
                     } else {
@@ -7247,6 +7946,7 @@
                             this.triggerRespawnCooldown(target.entity);
                         }
                         colonist.stats.hunger = clamp(colonist.stats.hunger + 24, 0, 100);
+                        colonist.stats.energy = clamp(colonist.stats.energy + 2, 0, 100);
                         colonist.carrying.type = carried > 0 ? 'food' : null;
                         colonist.carrying.amount = carried;
                         colonist.carrying.source = 'foraged';
@@ -7268,6 +7968,12 @@
                     colonist.stats.warmth = clamp(colonist.stats.warmth + 34, 0, 100);
                     colonist.stats.energy = clamp(colonist.stats.energy + 6, 0, 100);
                     colonist.stats.morale = clamp(colonist.stats.morale + 4, 0, 100);
+                    break;
+                case 'restCamp':
+                    colonist.stats.energy = clamp(colonist.stats.energy + 16, 0, 100);
+                    colonist.stats.health = clamp(colonist.stats.health + 3, 0, 100);
+                    colonist.stats.warmth = clamp(colonist.stats.warmth + (this.isCampFireLit() ? 8 : 3), 0, 100);
+                    colonist.stats.morale = clamp(colonist.stats.morale + 2, 0, 100);
                     break;
                 case 'sleepCamp':
                     colonist.stats.energy = clamp(colonist.stats.energy + 42, 0, 100);
@@ -7302,6 +8008,7 @@
                             this.rituals = this.rituals.slice(0, 12);
                             this.pushEvent(`${colonist.name} and ${peer.name} led an alliance ceremony.`);
                         }
+                        this.recordSocialDrift(colonist, { helpfulness: 0.014, selfishness: -0.008 });
                     }
                     break;
                 case 'tendWounds':
@@ -7310,9 +8017,52 @@
                     colonist.gainSkill('medicine', 0.9);
                     this.noteDiscovery('skill:medicine', `${colonist.name} learned basic wound care.`);
                     break;
+                case 'aidPeer':
+                    if (target.entity && target.entity.alive) {
+                        const peer = target.entity;
+                        if (peer.stats.hunger < 42 && this.camp.food > 0.5) {
+                            const sharedFood = Math.min(this.camp.food, 1);
+                            this.camp.food = Math.max(0, this.camp.food - sharedFood);
+                            peer.stats.hunger = clamp(peer.stats.hunger + 18 + sharedFood * 6, 0, 100);
+                        }
+                        if (peer.stats.thirst < 42 && this.camp.water > 0.4) {
+                            const sharedWater = Math.min(this.camp.water, 0.8);
+                            this.camp.water = Math.max(0, this.camp.water - sharedWater);
+                            peer.stats.thirst = clamp(peer.stats.thirst + 22 + sharedWater * 6, 0, 100);
+                        }
+                        if (peer.stats.warmth < 44) {
+                            peer.stats.warmth = clamp(peer.stats.warmth + (this.isCampFireLit() ? 18 : 10), 0, 100);
+                        }
+                        const unresolvedStarvation = peer.stats.hunger < 18 && this.camp.food <= 0.5;
+                        const unresolvedDehydration = peer.stats.thirst < 20 && this.camp.water <= 0.4;
+                        const canStabilizeBody = !unresolvedStarvation && !unresolvedDehydration;
+                        if (canStabilizeBody) {
+                            peer.stats.health = clamp(peer.stats.health + 12, 0, 100);
+                            peer.stats.energy = clamp(peer.stats.energy + 10, 0, 100);
+                        } else {
+                            peer.stats.energy = clamp(peer.stats.energy + 2, 0, 100);
+                        }
+                        peer.stats.morale = clamp(peer.stats.morale + 5, 0, 100);
+                        peer.woundSeverity = clamp((peer.woundSeverity || 0) - 0.18, 0, 1);
+                        if ((peer.woundSeverity || 0) < 0.14) {
+                            peer.woundCount = Math.max(0, (peer.woundCount || 0) - 1);
+                        }
+                        colonist.stats.morale = clamp(colonist.stats.morale + 3, 0, 100);
+                        colonist.mood.purpose = clamp(colonist.mood.purpose + 0.35, -5, 5);
+                        peer.mood.social = clamp(peer.mood.social + 0.22, -5, 5);
+                        colonist.relationships.friends[peer.id] = (colonist.relationships.friends[peer.id] || 0) + 0.16;
+                        peer.relationships.friends[colonist.id] = (peer.relationships.friends[colonist.id] || 0) + 0.2;
+                        colonist.gainSkill('medicine', 0.75);
+                        colonist.gainSkill('survival', 0.2);
+                        this.recordSocialDrift(colonist, { helpfulness: 0.028, selfishness: -0.014 });
+                        this.noteDiscovery('skill:medicine', `${colonist.name} helped the wounded recover.`);
+                    } else {
+                        this.recordFailedAction(colonist, 'aidPeer');
+                    }
+                    break;
                 case 'collectFood':
                     if (target.entity && !target.entity.depleted) {
-                        const haul = Math.min(2, target.entity.amount);
+                        const haul = Math.min(2 * this.getCarryLoadMultiplier(colonist), target.entity.amount);
                         target.entity.amount = Math.max(0, target.entity.amount - haul);
                         if (target.entity.amount <= 0.05) {
                             this.triggerRespawnCooldown(target.entity);
@@ -7337,14 +8087,24 @@
                     }
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
+                    colonist.carrying.projectId = null;
                     colonist.carrying.source = null;
                     colonist.stats.morale = clamp(colonist.stats.morale + 1.5, 0, 100);
+                    this.recordSocialDrift(colonist, { helpfulness: 0.018, selfishness: -0.01 });
                     this.pushEvent(`${colonist.name} delivered food to camp.`);
                     colonist.gainSkill('survival', 0.2);
                     break;
                 case 'collectWood':
                     if (target.entity && !target.entity.depleted) {
-                        const haul = Math.min(7 * (colonist.equipment.wood ? 1.45 : 1), target.entity.amount);
+                        const isTree = target.entity.type === 'trees';
+                        if (isTree && !this.canHarvestTrees(colonist)) {
+                            this.recordFailedAction(colonist, 'collectWood');
+                            break;
+                        }
+                        const haul = Math.min(
+                            (isTree ? 4 : 2) * (isTree && colonist.equipment.wood ? 1.2 : 1) * this.getCarryLoadMultiplier(colonist),
+                            target.entity.amount
+                        );
                         target.entity.amount = Math.max(0, target.entity.amount - haul);
                         if (target.entity.amount <= 0.05) {
                             this.triggerRespawnCooldown(target.entity);
@@ -7352,10 +8112,15 @@
                         colonist.carrying.type = 'wood';
                         colonist.carrying.amount = haul;
                         colonist.inventory.materials.logs += haul;
-                        colonist.inventory.materials.fiber += Math.max(1, Math.round(haul * 0.25));
-                        colonist.gainSkill('building', 0.7);
-                        this.wearTool(colonist, 'collectWood', 1.4);
+                        colonist.inventory.materials.fiber += isTree
+                            ? Math.max(1, Math.round(haul * 0.2))
+                            : Math.max(0, Math.round(haul * 0.12));
+                        colonist.gainSkill('building', isTree ? 0.7 : 0.45);
+                        if (isTree) {
+                            this.wearTool(colonist, 'collectWood', 1.4);
+                        }
                         if (
+                            isTree &&
                             target.entity.biome === 'forest' &&
                             (target.entity.depleted || target.entity.amount < 14 || this.rng() < 0.22)
                         ) {
@@ -7367,7 +8132,6 @@
                     break;
                 case 'deliverWood':
                     this.camp.wood += colonist.carrying.amount;
-                    this.camp.fireFuel += colonist.carrying.amount * 0.35;
                     this.noteStorageDelivery(target);
                     this.addCampMaterial('logs', colonist.inventory.materials.logs);
                     this.addCampMaterial('fiber', colonist.inventory.materials.fiber);
@@ -7375,20 +8139,31 @@
                     colonist.inventory.materials.fiber = 0;
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
+                    colonist.carrying.projectId = null;
                     break;
                 case 'collectStone':
                     if (target.entity && !target.entity.depleted) {
-                        const haul = Math.min(6 * (colonist.equipment.building ? 1.3 : 1), target.entity.amount);
+                        const isDeposit = target.entity.type === 'stone';
+                        if (isDeposit && !this.canHarvestStoneDeposit(colonist)) {
+                            this.recordFailedAction(colonist, 'collectStone');
+                            break;
+                        }
+                        const haul = Math.min(
+                            (isDeposit ? 6 : 1) * (isDeposit && colonist.equipment.building ? 1.3 : 1) * this.getCarryLoadMultiplier(colonist),
+                            target.entity.amount
+                        );
                         target.entity.amount = Math.max(0, target.entity.amount - haul);
                         if (target.entity.amount <= 0.05) {
                             this.triggerRespawnCooldown(target.entity);
                         }
                         colonist.carrying.type = 'stone';
                         colonist.carrying.amount = haul;
-                        colonist.gainSkill('building', 0.7);
-                        this.noteDiscovery('resource:stone', `${colonist.name} learned how to work stone.`);
-                        this.wearTool(colonist, 'collectStone', 1.1);
-                        this.markQuarryAt(target.entity.x, target.entity.y);
+                        colonist.gainSkill('building', isDeposit ? 0.7 : 0.4);
+                        if (isDeposit) {
+                            this.noteDiscovery('resource:stone', `${colonist.name} learned how to work stone.`);
+                            this.wearTool(colonist, 'collectStone', 1.1);
+                            this.markQuarryAt(target.entity.x, target.entity.y);
+                        }
                     } else {
                         this.recordFailedAction(colonist, 'collectStone');
                     }
@@ -7399,6 +8174,7 @@
                     this.noteStorageDelivery(target);
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
+                    colonist.carrying.projectId = null;
                     break;
                 case 'craftRecipe':
                     if (this.completeRecipeCraft(colonist, target.recipeKey)) {
@@ -7419,6 +8195,7 @@
                     }
                     colonist.carrying.type = target.material;
                     colonist.carrying.amount = target.amount;
+                    colonist.carrying.projectId = target.projectId;
                     break;
                 }
                 case 'deliverProjectMaterial': {
@@ -7430,12 +8207,40 @@
                     project.delivered[target.material] = (project.delivered[target.material] || 0) + colonist.carrying.amount;
                     colonist.carrying.type = null;
                     colonist.carrying.amount = 0;
+                    colonist.carrying.projectId = null;
                     colonist.gainSkill('building', 0.35);
+                    break;
+                }
+                case 'clearProjectSite': {
+                    const project = this.projects.find((entry) => entry.id === target.projectId);
+                    const resource = this.resources.find((entry) => entry.id === target.resourceId);
+                    if (!project || !resource || resource.depleted) {
+                        this.recordFailedAction(colonist, 'clearProjectSite');
+                        break;
+                    }
+                    if (this.clearProjectResource(resource, project, colonist)) {
+                        project.clearedTiles = (project.clearedTiles || 0) + 1;
+                    } else {
+                        this.recordFailedAction(colonist, 'clearProjectSite');
+                    }
+                    break;
+                }
+                case 'clearProjectTile': {
+                    const project = this.projects.find((entry) => entry.id === target.projectId);
+                    if (!project || !Number.isFinite(target.gridCol) || !Number.isFinite(target.gridRow)) {
+                        this.recordFailedAction(colonist, 'clearProjectTile');
+                        break;
+                    }
+                    if (this.clearProjectCell(project, target.gridCol, target.gridRow, colonist)) {
+                        project.clearedTiles = (project.clearedTiles || 0) + 1;
+                    } else {
+                        this.recordFailedAction(colonist, 'clearProjectTile');
+                    }
                     break;
                 }
                 case 'buildStructure': {
                     const project = this.projects.find((entry) => entry.id === target.projectId);
-                    if (!project || !this.projectHasAllMaterials(project)) {
+                    if (!project || this.getNextProjectClearingTarget(project) || this.getNextProjectClearingCell(project) || !this.projectHasAllMaterials(project)) {
                         this.recordFailedAction(colonist, 'buildStructure');
                         break;
                     }
@@ -7585,6 +8390,25 @@
             return assigned * 85;
         }
 
+        getPointAssignmentPenalty(point, colonist = null, options = {}) {
+            const radius = options.radius || 28;
+            let assigned = 0;
+            for (const entry of this.colonists) {
+                if (!entry.alive || entry === colonist) {
+                    continue;
+                }
+                const step = entry.plan[entry.planStep];
+                if (options.action && step?.action !== options.action) {
+                    continue;
+                }
+                const targetPoint = step?.destination || step?.entity || null;
+                if (targetPoint && distance(targetPoint, point) < radius) {
+                    assigned += 1;
+                }
+            }
+            return assigned * 90;
+        }
+
         getActionDuration(colonist, skill, baseDuration, action = null) {
             const level = colonist?.skills?.[skill] || 0;
             const toolMultiplier = action ? this.getToolSpeedMultiplier(colonist, action) : 1;
@@ -7602,6 +8426,8 @@
                     return this.getCampMaterial('planks') > 0 || this.countCompletedAction('processMaterials') > 0 || this.countProjects('hut') > 0 || this.countProjects('storage') > 0 || this.countProjects('workshop') > 0;
                 case 'rope':
                     return this.getCampMaterial('rope') > 0 || this.countCompletedAction('processMaterials') > 0 || this.colonyKnowledge.discoveries.includes('skill:hunting') || this.colonyKnowledge.discoveries.includes('skill:planting');
+                case 'hides':
+                    return this.getCampMaterial('hides') > 0 || this.colonyKnowledge.discoveries.includes('resource:wildAnimal') || this.colonyKnowledge.discoveries.includes('skill:hunting');
                 case 'tools':
                     return this.camp.items.length > 0 ||
                         this.colonists.some((colonist) => Object.values(colonist.equipment).some(Boolean)) ||
@@ -7673,6 +8499,8 @@
                 eatAndGatherFood: 'gatherer',
                 collectWood: 'builder',
                 collectStone: 'builder',
+                clearProjectSite: 'builder',
+                clearProjectTile: 'builder',
                 buildStructure: 'builder',
                 pickupProjectMaterial: 'builder',
                 deliverProjectMaterial: 'builder',
@@ -7680,7 +8508,13 @@
                 huntMeal: 'hunter',
                 craftRecipe: 'crafter',
                 processMaterials: 'crafter',
-                repairTool: 'crafter'
+                repairTool: 'crafter',
+                tendWounds: 'helper',
+                aidPeer: 'helper',
+                socializeWithPeer: 'helper',
+                deliverWater: 'helper',
+                deliverFood: 'helper',
+                restCamp: 'helper'
             }[action];
             if (laborRole) {
                 this.recentLabor[laborRole] = (this.recentLabor[laborRole] || 0) + 1;
@@ -7725,6 +8559,11 @@
                     (this.colonyKnowledge.discoveries.includes('resource:trees') || this.colonyKnowledge.discoveries.includes('resource:wildAnimal')) &&
                     this.countCompletedAction('warmCamp') >= 10 &&
                     this.getColonySkillAverage('survival') >= 1.5,
+                furClothing: () =>
+                    (this.colonyKnowledge.discoveries.includes('resource:wildAnimal') || this.colonyKnowledge.discoveries.includes('skill:hunting')) &&
+                    (this.colonyKnowledge.discoveries.includes('skill:cold_weather') || this.countCompletedAction('warmCamp') >= 12) &&
+                    this.countCompletedAction('huntAnimal') + this.countCompletedAction('huntMeal') >= 2 &&
+                    this.getColonySkillAverage('survival') >= 1.8,
                 spear: () =>
                     (this.colonyKnowledge.discoveries.includes('resource:wildAnimal') || this.colonyKnowledge.discoveries.includes('skill:hunting')) &&
                     this.countCompletedAction('huntAnimal') + this.countCompletedAction('huntMeal') >= 2 &&
@@ -7746,6 +8585,7 @@
                 hammer: () => colonist.skills.building >= 2.5,
                 firePit: () => colonist.skills.crafting >= 2.5,
                 simpleClothing: () => colonist.skills.survival >= 1.2 || colonist.skills.crafting >= 1.2,
+                furClothing: () => colonist.skills.survival >= 1.4 || colonist.skills.crafting >= 1.8 || colonist.skills.hunting >= 1.4,
                 spear: () => colonist.skills.hunting >= 1.5 || colonist.skills.crafting >= 2,
                 hoe: () => colonist.skills.farming >= 0.8 || colonist.skills.crafting >= 2,
                 basket: () => colonist.skills.crafting >= 1.5,
@@ -7925,6 +8765,9 @@
 
         getBuildingSoftCap(type) {
             const population = this.colonists.length;
+            if (type === 'leanTo') {
+                return 2;
+            }
             if (type === 'workshop') {
                 return this.hasTechnology('engineering') && population >= 10 ? 2 : 1;
             }
@@ -7937,6 +8780,58 @@
         isBuildingSoftCapped(type) {
             const cap = this.getBuildingSoftCap(type);
             return Number.isFinite(cap) && this.getActiveBuildCount(type) >= cap;
+        }
+
+        hasReachedEraRequirement(type) {
+            const requiredEra = BUILDING_ERA_REQUIREMENTS[type];
+            if (!requiredEra) {
+                return true;
+            }
+            const currentIndex = ERA_BANDS.indexOf(this.getCurrentEra());
+            const requiredIndex = ERA_BANDS.indexOf(requiredEra);
+            if (requiredIndex === -1) {
+                return true;
+            }
+            return currentIndex >= requiredIndex;
+        }
+
+        getBuildingLineage(type) {
+            return Object.entries(BUILDING_LINEAGES).find(([, chain]) => chain.includes(type))?.[0] || null;
+        }
+
+        getLineageStarterCount(lineage) {
+            const chain = BUILDING_LINEAGES[lineage];
+            if (!chain?.length) {
+                return 0;
+            }
+            return this.getActiveBuildCount(chain[0]);
+        }
+
+        getLineageUpgradeCount(lineage) {
+            const chain = BUILDING_LINEAGES[lineage];
+            if (!chain?.length) {
+                return 0;
+            }
+            return chain.slice(1).reduce((sum, type) => sum + this.getActiveBuildCount(type), 0);
+        }
+
+        hasAnyLineageStructure(lineage) {
+            const chain = BUILDING_LINEAGES[lineage];
+            if (!chain?.length) {
+                return false;
+            }
+            return chain.some((type) => this.getActiveBuildCount(type) > 0);
+        }
+
+        shouldPreferStarterStructure(type) {
+            const lineage = this.getBuildingLineage(type);
+            if (lineage === 'shelter') {
+                return this.getLineageStarterCount('shelter') < 2 && this.getLineageUpgradeCount('shelter') === 0;
+            }
+            if (lineage === 'storage') {
+                return !this.hasAnyLineageStructure('storage');
+            }
+            return true;
         }
 
         getBuildingCapacity() {
@@ -7978,6 +8873,18 @@
             building.integrity = after;
             if (applied > 0 && options.resetHarvest !== false && (building.type === 'farmPlot' || building.type === 'engineeredFarm')) {
                 this.resetFarmBuildingState(building);
+            }
+            if (after <= 0 && options.allowDowngrade !== false) {
+                const downgradedType = BUILDING_DOWNGRADES[building.type];
+                if (downgradedType) {
+                    const previousType = building.type;
+                    building.type = downgradedType;
+                    building.maxIntegrity = BUILDING_DEFS[downgradedType]?.durability || maxIntegrity;
+                    building.integrity = Math.max(1, Math.floor(building.maxIntegrity * 0.35));
+                    this.pushEvent(`The ${previousType} collapsed into a damaged ${downgradedType}.`);
+                    this.assignFamilyHomes();
+                    return applied;
+                }
             }
             return applied;
         }
@@ -8051,7 +8958,7 @@
                 const strikeDamage = 0.7 + exposedBuildings[0].risk * 1.2;
                 this.applyBuildingDamage(target, strikeDamage);
                 if (target.type === 'campfire') {
-                    this.camp.fireFuel = Math.max(0, this.camp.fireFuel - 2.5);
+                    this.consumeCampMaterial('logs', Math.min(this.getCampMaterial('logs'), 1.5));
                 }
                 this.startRepairProject(target);
                 this.pushEvent(`Lightning struck the ${target.type}.`);
@@ -8068,15 +8975,94 @@
             return project?.buildTime || BUILDING_DEFS[project?.type]?.buildTime || 1;
         }
 
+        getUpgradeReuseFactor(type, targetType) {
+            const nextLineage = this.getBuildingLineage(type);
+            const previousLineage = this.getBuildingLineage(targetType);
+            if (nextLineage && nextLineage === previousLineage) {
+                return BUILDING_UPGRADE_REUSE_FACTORS[nextLineage] ?? BUILDING_UPGRADE_REUSE_FACTORS.default;
+            }
+            return BUILDING_UPGRADE_REUSE_FACTORS.default;
+        }
+
+        getUpgradeBuildTimeMultiplier(type, targetType) {
+            const nextLineage = this.getBuildingLineage(type);
+            const previousLineage = this.getBuildingLineage(targetType);
+            if (nextLineage && nextLineage === previousLineage) {
+                return BUILDING_UPGRADE_TIME_FACTORS[nextLineage] ?? BUILDING_UPGRADE_TIME_FACTORS.default;
+            }
+            return BUILDING_UPGRADE_TIME_FACTORS.default;
+        }
+
+        getUpgradePreview(building) {
+            if (!building) {
+                return null;
+            }
+            const nextType = Object.entries(BUILDING_UPGRADES)
+                .find(([, sources]) => sources.includes(building.type))?.[0] || null;
+            if (!nextType) {
+                return null;
+            }
+            return {
+                nextType,
+                ready: this.canPursueBuilding(nextType),
+                reasons: this.getUpgradeBlockingReasons(nextType, building.type)
+            };
+        }
+
+        getUpgradeBlockingReasons(type, targetType = null) {
+            const reasons = [];
+            if (!this.hasReachedEraRequirement(type)) {
+                reasons.push(`requires ${this.getEraDisplayName(BUILDING_ERA_REQUIREMENTS[type] || this.getCurrentEra())}`);
+            }
+            if (this.isBuildingSoftCapped(type)) {
+                reasons.push('soft cap reached');
+            }
+            if (!this.hasRequiredBuildingToolTier(type)) {
+                reasons.push(`needs ${this.getBuildingToolTierRequirement(type)} building tools`);
+            }
+            const projected = targetType ? this.getUpgradeRequirements(type, targetType) : this.getProjectedBuildingRequirements(type);
+            if (targetType && !this.buildings.some((building) => building.type === targetType)) {
+                reasons.push(`needs ${targetType}`);
+            }
+            if (!targetType && BUILDING_UPGRADES[type]?.length && !this.getUpgradeableBuilding(type)) {
+                reasons.push(`needs ${BUILDING_UPGRADES[type].join(' or ')}`);
+            }
+            for (const [material, amount] of Object.entries(projected || {})) {
+                const available = material === 'stone' || material === 'wood'
+                    ? this.camp[material]
+                    : this.getCampMaterial(material);
+                if (available < amount) {
+                    reasons.push(`needs ${amount} ${material}`);
+                }
+            }
+            const extraChecks = {
+                leanTo: () => this.countCompletedAction('collectWood') >= 8 ? null : 'needs more shelter-building experience',
+                hut: () => this.getColonySkillAverage('building') >= 3.2 ? null : 'builders need more skill',
+                cottage: () => this.hasTechnology('masonry') ? null : 'requires masonry',
+                house: () => this.hasTechnology('engineering') ? null : 'requires engineering',
+                fortifiedStructure: () => this.hasTechnology('militaryOrganization') && this.hasTechnology('masonry') ? null : 'requires military organization and masonry',
+                storagePit: () => this.hasTechnology('storagePlanning') ? null : 'requires storage planning',
+                storage: () => this.colonyKnowledge.discoveries.includes('skill:tool_use') ? null : 'requires tool use',
+                granary: () => this.hasTechnology('storagePlanning') ? null : 'requires storage planning',
+                warehouse: () => this.hasTechnology('engineering') ? null : 'requires engineering'
+            };
+            const extra = extraChecks[type]?.();
+            if (extra) {
+                reasons.push(extra);
+            }
+            return Array.from(new Set(reasons));
+        }
+
         getUpgradeRequirements(type, targetType) {
             const nextDef = BUILDING_DEFS[type];
             const previousDef = BUILDING_DEFS[targetType];
             if (!nextDef || !previousDef) {
                 return nextDef?.materials || {};
             }
+            const reuseFactor = this.getUpgradeReuseFactor(type, targetType);
             const requirements = {};
             for (const [material, amount] of Object.entries(nextDef.materials || {})) {
-                const reusedAmount = Math.floor((previousDef.materials?.[material] || 0) * 0.7);
+                const reusedAmount = Math.floor((previousDef.materials?.[material] || 0) * reuseFactor);
                 const remaining = Math.max(0, amount - reusedAmount);
                 if (remaining > 0) {
                     requirements[material] = remaining;
@@ -8149,6 +9135,123 @@
                 building.type === 'fortifiedStructure' ||
                 building.type === 'stoneKeep'
             );
+        }
+
+        getHomeSlotCapacity(building) {
+            return BUILDING_HOME_SLOTS[building?.type] || 0;
+        }
+
+        updateResidentialOccupancy() {
+            const homes = this.getResidentialBuildings();
+            for (const home of homes) {
+                home.occupantIds = [];
+                home.familyIds = [];
+                home.occupancy = 0;
+                home.capacity = this.getHomeSlotCapacity(home);
+            }
+            const homeById = new Map(homes.map((home) => [home.id, home]));
+            const markOccupant = (colonist, familyId = null) => {
+                if (!colonist?.homeBuildingId) {
+                    return false;
+                }
+                const home = homeById.get(colonist.homeBuildingId);
+                if (!home) {
+                    colonist.homeBuildingId = null;
+                    return false;
+                }
+                const capacity = this.getHomeSlotCapacity(home);
+                if ((home.occupantIds?.length || 0) >= capacity) {
+                    return false;
+                }
+                if (!home.occupantIds.includes(colonist.id)) {
+                    home.occupantIds.push(colonist.id);
+                    home.occupancy = home.occupantIds.length;
+                }
+                if (familyId != null && !home.familyIds.includes(familyId)) {
+                    home.familyIds.push(familyId);
+                }
+                return true;
+            };
+            for (const family of this.families) {
+                const members = family.memberIds
+                    .map((id) => this.colonists.find((colonist) => colonist.id === id))
+                    .filter(Boolean);
+                if (!members.length) {
+                    family.homeBuildingId = null;
+                    continue;
+                }
+                if (family.homeBuildingId && members.every((member) => markOccupant(member, family.id))) {
+                    continue;
+                }
+                if (family.homeBuildingId) {
+                    for (const member of members) {
+                        member.homeBuildingId = null;
+                    }
+                    family.homeBuildingId = null;
+                }
+            }
+            const unassignedFamilies = this.families
+                .filter((family) => !family.homeBuildingId)
+                .sort((left, right) => right.memberIds.length - left.memberIds.length);
+            for (const family of unassignedFamilies) {
+                const members = family.memberIds
+                    .map((id) => this.colonists.find((colonist) => colonist.id === id))
+                    .filter(Boolean);
+                if (!members.length) {
+                    continue;
+                }
+                const adults = family.adultIds
+                    .map((id) => this.colonists.find((colonist) => colonist.id === id))
+                    .filter(Boolean);
+                const anchor = adults[0] || members[0] || this.camp;
+                const home = homes
+                    .filter((candidate) => {
+                        const used = candidate.occupantIds?.length || 0;
+                        return this.getHomeSlotCapacity(candidate) - used >= members.length;
+                    })
+                    .sort((left, right) => {
+                        const leftOpen = this.getHomeSlotCapacity(left) - (left.occupantIds?.length || 0);
+                        const rightOpen = this.getHomeSlotCapacity(right) - (right.occupantIds?.length || 0);
+                        const leftWaste = leftOpen - members.length;
+                        const rightWaste = rightOpen - members.length;
+                        if (leftWaste !== rightWaste) {
+                            return leftWaste - rightWaste;
+                        }
+                        return distance(anchor, left) - distance(anchor, right);
+                    })[0];
+                if (!home) {
+                    continue;
+                }
+                family.homeBuildingId = home.id;
+                for (const member of members) {
+                    member.homeBuildingId = home.id;
+                    markOccupant(member, family.id);
+                }
+            }
+            const singles = this.colonists
+                .filter((colonist) => colonist.alive && !colonist.familyId)
+                .sort((left, right) => distance(left, this.camp) - distance(right, this.camp));
+            for (const colonist of singles) {
+                if (markOccupant(colonist)) {
+                    continue;
+                }
+                const home = homes
+                    .filter((candidate) => (candidate.occupantIds?.length || 0) < this.getHomeSlotCapacity(candidate))
+                    .sort((left, right) => {
+                        const leftUsed = left.occupantIds?.length || 0;
+                        const rightUsed = right.occupantIds?.length || 0;
+                        if (leftUsed !== rightUsed) {
+                            return leftUsed - rightUsed;
+                        }
+                        return distance(colonist, left) - distance(colonist, right);
+                    })[0];
+                if (!home) {
+                    colonist.homeBuildingId = null;
+                    continue;
+                }
+                colonist.homeBuildingId = home.id;
+                markOccupant(colonist);
+            }
         }
 
         getFamilyById(familyId) {
@@ -8229,48 +9332,7 @@
         }
 
         assignFamilyHomes() {
-            const homes = this.getResidentialBuildings();
-            const available = homes.slice();
-            for (const family of this.families) {
-                const existing = family.homeBuildingId ? this.buildings.find((building) => building.id === family.homeBuildingId) : null;
-                if (existing) {
-                    for (const memberId of family.memberIds) {
-                        const member = this.colonists.find((colonist) => colonist.id === memberId);
-                        if (member) {
-                            member.homeBuildingId = existing.id;
-                        }
-                    }
-                    const index = available.findIndex((building) => building.id === existing.id);
-                    if (index >= 0) {
-                        available.splice(index, 1);
-                    }
-                    continue;
-                }
-                if (!available.length) {
-                    continue;
-                }
-                const adults = family.adultIds
-                    .map((id) => this.colonists.find((colonist) => colonist.id === id))
-                    .filter(Boolean);
-                const anchor = adults[0] || this.camp;
-                const home = available
-                    .slice()
-                    .sort((left, right) => distance(anchor, left) - distance(anchor, right))[0];
-                if (!home) {
-                    continue;
-                }
-                family.homeBuildingId = home.id;
-                for (const memberId of family.memberIds) {
-                    const member = this.colonists.find((colonist) => colonist.id === memberId);
-                    if (member) {
-                        member.homeBuildingId = home.id;
-                    }
-                }
-                const index = available.findIndex((building) => building.id === home.id);
-                if (index >= 0) {
-                    available.splice(index, 1);
-                }
-            }
+            this.updateResidentialOccupancy();
         }
 
         spawnChildForFamily(family) {
@@ -8417,10 +9479,35 @@
             return clamp(this.getBuildingCapacity() / Math.max(1, this.colonists.length), 0.45, 1.25);
         }
 
+        getStorageTierValue() {
+            if (this.countBuildings('warehouse') > 0) {
+                return 3;
+            }
+            if (this.countBuildings('granary') > 0) {
+                return 2;
+            }
+            if (this.countBuildings('storage') > 0 || this.countBuildings('storagePit') > 0) {
+                return 1;
+            }
+            return 0;
+        }
+
         getStorageCapacity() {
             return 36 + this.buildings.reduce((sum, building) => (
                 sum + (BUILDING_DEFS[building.type]?.storageBonus || 0) * Math.max(0.25, this.getBuildingIntegrityRatio(building))
             ), 0);
+        }
+
+        getStorageHaulMultiplier() {
+            return [1, 1.08, 1.18, 1.28][this.getStorageTierValue()] || 1;
+        }
+
+        getStorageReserveBuffer() {
+            return [2, 4, 7, 10][this.getStorageTierValue()] || 2;
+        }
+
+        getStorageSpoilageMultiplier() {
+            return [1, 0.55, 0.34, 0.2][this.getStorageTierValue()] || 1;
         }
 
         getPredatorPressure() {
@@ -8428,20 +9515,12 @@
         }
 
         getFoodSpoilageRate() {
-            const overage = Math.max(0, this.camp.food - this.getStorageCapacity());
+            const safeReserve = Math.max(this.getStorageCapacity(), this.getDesiredFoodReserve() + 6);
+            const overage = Math.max(0, this.camp.food - safeReserve);
             if (overage <= 0) {
                 return 0;
             }
-            if (this.countBuildings('warehouse') > 0) {
-                return 0.003 * overage;
-            }
-            if (this.countBuildings('granary') > 0) {
-                return 0.0045 * overage;
-            }
-            if (this.countBuildings('storage') > 0 || this.countBuildings('storagePit') > 0) {
-                return 0.006 * overage;
-            }
-            return 0.018 * overage;
+            return 0.01 * overage * this.getStorageSpoilageMultiplier();
         }
 
         getStockpilePressure() {
@@ -8496,6 +9575,17 @@
                 this.getColonySkillAverage('crafting') >= 1.8
             )) {
                 this.unlockTechnology('toolmaking', 'Repeated tool work turned survival tricks into true toolmaking.');
+            }
+
+            if (!this.hasTechnology('insulation') && (
+                this.colonyKnowledge.discoveries.includes('skill:cold_weather') ||
+                exposurePressure >= 12 ||
+                this.countOwnedItems('simpleClothing') + this.countOwnedItems('furClothing') >= Math.max(2, Math.ceil(this.colonists.length * 0.45))
+            ) && (
+                this.countBuildings('leanTo') + this.countBuildings('hut') + this.countBuildings('cottage') > 0 ||
+                this.countCompletedAction('warmCamp') >= 8
+            )) {
+                this.unlockTechnology('insulation', 'Cold seasons taught the colony insulation and better shelter habits.');
             }
 
             if (!this.hasTechnology('agriculture') && readiness.phase5 && (
@@ -8819,6 +9909,8 @@
                 colonist.stats.morale = clamp(colonist.stats.morale - dt * this.phase9.pressure.unrest * 0.18, 0, 100);
                 colonist.mood.conflict = clamp(colonist.mood.conflict + dt * this.phase9.pressure.unrest * 0.03, -5, 5);
                 if (this.phase9.pressure.disease > 0.52) {
+                    colonist.sicknessTtl = Math.max(colonist.sicknessTtl || 0, 18);
+                    colonist.lastDamageCause = 'disease';
                     colonist.stats.health = clamp(colonist.stats.health - dt * this.phase9.pressure.disease * 0.06, 0, 100);
                 }
             }
@@ -8854,9 +9946,11 @@
                 const x = clamp(this.camp.x + Math.cos(angle) * radius, 36, this.width - 36);
                 const y = clamp(this.camp.y + Math.sin(angle) * radius, 36, this.height - 36);
                 const predatorId = this.predators.reduce((maxId, predator) => Math.max(maxId, predator.id || 0), 0) + 1;
-                this.predators.push(this.makePredator(predatorId, x, y, this.getCellAt(x, y).biome));
-                this.pushEvent('Predators migrated closer to the growing settlements.');
-                this.phase9.cooldowns.predators = 36;
+                const predator = this.placePredatorIfOpen(predatorId, x, y, this.getCellAt(x, y).biome, { attempts: 12, spread: 42 });
+                if (predator) {
+                    this.pushEvent('Predators migrated closer to the growing settlements.');
+                    this.phase9.cooldowns.predators = 36;
+                }
             }
 
             if (livingAnimals < 14 && this.rng() < dt * 0.0007 * Math.max(0.25, this.phase9.ecology.foodChain)) {
@@ -8871,8 +9965,9 @@
                         continue;
                     }
                     const animalId = this.animals.reduce((maxId, animal) => Math.max(maxId, animal.id || 0), 0) + 1;
-                    this.animals.push(this.makeAnimal(animalId, x, y, cell.biome));
-                    break;
+                    if (this.placeAnimalIfOpen(animalId, x, y, cell.biome, { attempts: 10, spread: 32 })) {
+                        break;
+                    }
                 }
             }
         }
@@ -8943,12 +10038,25 @@
                 this.needsToolRepair() ? 2 : 0
             ) + (this.chooseProcessingTask() ? 2 : 0) + (crafterProbe && this.chooseCraftRecipe(crafterProbe) ? 2 : 0));
             const dangerPressure = Math.min(8, this.predators.length * 1.2 + this.colonyKnowledge.dangerZones.length * 0.25);
+            const helperPressure = Math.min(8,
+                this.colonists.filter((colonist) =>
+                    colonist.alive &&
+                    (
+                        colonist.stats.health < 82 ||
+                        colonist.stats.morale < 46 ||
+                        (colonist.woundSeverity || 0) > 0.16 ||
+                        (colonist.emotionalMemory?.griefLoad || 0) > 0.22
+                    )
+                ).length * 1.15 +
+                this.families.reduce((sum, family) => sum + family.childIds.length, 0) * 0.45
+            );
             return {
                 farmer: foodPressure + this.countBuildings('farmPlot') * 0.8,
                 builder: buildPressure + Math.min(4, woodNeed + stoneNeed),
                 gatherer: Math.max(foodPressure, woodNeed * 0.8),
                 hunter: foodPressure * 0.8 + dangerPressure,
-                crafter: craftPressure + Math.min(4, plankNeed * 0.9 + ropeNeed * 1.2)
+                crafter: craftPressure + Math.min(4, plankNeed * 0.9 + ropeNeed * 1.2),
+                helper: helperPressure
             };
         }
 
@@ -8964,28 +10072,27 @@
             const caretakerPressure = dependentChildren > 0 ? Math.min(4, dependentChildren * 1.2) : 0;
             const lastFamilyAdult = this.isLastFamilyAdult(colonist);
             const guardianCaution = lastFamilyAdult ? 1.8 + caretakerPressure * 0.45 : 0;
+            const disposition = {
+                ...createRoleTracker(0),
+                ...(colonist.roleDisposition || {})
+            };
 
             return {
-                farmer: Math.max(0, colonist.skills.farming * 1.35 + colonist.skills.survival * 0.2 + roleDemand.farmer + (colonist.intent === 'plant' ? 2.5 : 0) - farmingFailures * 0.85 - injuryPenalty * 0.35 + caretakerPressure * 0.7 + guardianCaution * 0.6),
-                builder: Math.max(0, colonist.skills.building * 1.3 + colonist.skills.crafting * 0.3 + roleDemand.builder + (colonist.intent === 'build' ? 2.5 : 0) - buildFailures * 0.7 - injuryPenalty * 0.25 - exhaustionPenalty * 0.25 - guardianCaution * 0.9),
-                gatherer: Math.max(0, colonist.skills.foraging * 1.25 + colonist.skills.survival * 0.45 + roleDemand.gatherer + (colonist.intent === 'forage' ? 2.2 : 0) - gatherFailures * 0.45 + farmingFailures * 0.5 + caretakerPressure * 0.55 + guardianCaution * 0.45),
-                hunter: Math.max(0, colonist.skills.hunting * 1.35 + colonist.skills.combat * 0.35 + roleDemand.hunter + (colonist.intent === 'hunt' ? 2.2 : 0) - huntingFailures * 0.8 - injuryPenalty * 1.05 - exhaustionPenalty * 0.7 - guardianCaution * 2.4),
-                crafter: Math.max(0, colonist.skills.crafting * 1.4 + colonist.skills.building * 0.2 + colonist.skills.medicine * 0.3 + roleDemand.crafter + ((colonist.intent === 'craft' || colonist.intent === 'process' || colonist.intent === 'repair') ? 2.4 : 0) + injuryPenalty * 0.65 + exhaustionPenalty * 0.25 + huntingFailures * 0.45 + caretakerPressure * 0.9 + guardianCaution * 1.2)
+                farmer: Math.max(0, colonist.skills.farming * 1.35 + colonist.skills.survival * 0.2 + roleDemand.farmer + disposition.farmer * 7 + (colonist.intent === 'plant' ? 2.5 : 0) - farmingFailures * 0.85 - injuryPenalty * 0.35 + caretakerPressure * 0.7 + guardianCaution * 0.6),
+                builder: Math.max(0, colonist.skills.building * 1.3 + colonist.skills.crafting * 0.3 + roleDemand.builder + disposition.builder * 7.5 + (colonist.intent === 'build' ? 2.5 : 0) - buildFailures * 0.7 - injuryPenalty * 0.25 - exhaustionPenalty * 0.25 - guardianCaution * 0.9),
+                gatherer: Math.max(0, colonist.skills.foraging * 1.25 + colonist.skills.survival * 0.45 + roleDemand.gatherer + disposition.gatherer * 7 + (colonist.intent === 'forage' ? 2.2 : 0) - gatherFailures * 0.45 + farmingFailures * 0.5 + caretakerPressure * 0.55 + guardianCaution * 0.45),
+                hunter: Math.max(0, colonist.skills.hunting * 1.35 + colonist.skills.combat * 0.35 + roleDemand.hunter + disposition.hunter * 7.2 + (colonist.intent === 'hunt' ? 2.2 : 0) - huntingFailures * 0.8 - injuryPenalty * 1.05 - exhaustionPenalty * 0.7 - guardianCaution * 2.4),
+                crafter: Math.max(0, colonist.skills.crafting * 1.4 + colonist.skills.building * 0.2 + colonist.skills.medicine * 0.3 + roleDemand.crafter + disposition.crafter * 7.4 + ((colonist.intent === 'craft' || colonist.intent === 'process' || colonist.intent === 'repair') ? 2.4 : 0) + injuryPenalty * 0.65 + exhaustionPenalty * 0.25 + huntingFailures * 0.45 + caretakerPressure * 0.9 + guardianCaution * 1.2),
+                helper: Math.max(0, colonist.skills.medicine * 1.45 + colonist.skills.survival * 0.35 + roleDemand.helper + disposition.helper * 8.2 + (colonist.intent === 'tend' || colonist.intent === 'socialize' || colonist.intent === 'haulWater' ? 2.4 : 0) + colonist.traits.sociability * 6 + colonist.traits.caution * 2.4 - colonist.traits.aggression * 3 + caretakerPressure * 1.4 + guardianCaution * 1.6 + injuryPenalty * 0.2)
             };
         }
 
         getRoleScores(colonist) {
             if (colonist.lifeStage !== 'adult') {
-                return {
-                    farmer: 0,
-                    builder: 0,
-                    gatherer: 0,
-                    hunter: 0,
-                    crafter: 0
-                };
+                return createRoleTracker(0);
             }
             const scores = this.getBaseRoleScores(colonist);
-            const counts = { farmer: 0, builder: 0, gatherer: 0, hunter: 0, crafter: 0 };
+            const counts = createRoleTracker(0);
             for (const peer of this.colonists) {
                 if (peer === colonist || !peer.alive || peer.lifeStage !== 'adult') {
                     continue;
@@ -8997,7 +10104,7 @@
                 }
             }
             const adultCount = this.colonists.filter((peer) => peer.alive && peer.lifeStage === 'adult').length;
-            const targetPerRole = Math.max(1, adultCount / 4);
+            const targetPerRole = Math.max(1, adultCount / ROLE_KEYS.length);
             for (const role of Object.keys(scores)) {
                 const shortage = Math.max(0, targetPerRole - counts[role]);
                 const crowding = Math.max(0, counts[role] - targetPerRole);
@@ -9005,16 +10112,16 @@
                 scores[role] -= crowding * 1.9;
             }
             const eraRoleBias = {
-                survival: { gatherer: 1.8, hunter: 1.2, builder: 0.4 },
+                survival: { gatherer: 1.8, hunter: 1.2, builder: 0.4, helper: 0.8 },
                 toolmaking: { crafter: 1.8, builder: 0.8, gatherer: 0.5 },
-                agriculture: { farmer: 2.6, gatherer: -0.8, hunter: -0.4 },
+                agriculture: { farmer: 2.6, gatherer: -0.8, hunter: -0.4, helper: 0.5 },
                 masonry: { builder: 2.8, crafter: 1.2 },
-                medicine: { crafter: 1.2, farmer: 0.4 },
+                medicine: { crafter: 1.2, farmer: 0.4, helper: 3 },
                 'military organization': { hunter: 2.2, builder: 0.8 },
-                engineering: { builder: 2.4, crafter: 2.1, farmer: 0.7 },
+                engineering: { builder: 2.4, crafter: 2.1, farmer: 0.7, helper: 0.8 },
                 metallurgy: { builder: 1.6, crafter: 2.4, hunter: 1 },
-                'bronze age': { crafter: 2.8, builder: 2.1, farmer: 1.2, hunter: 0.4 },
-                'iron age': { builder: 2.8, farmer: 1.9, crafter: 1.8, hunter: 0.3, gatherer: -0.4 }
+                'bronze age': { crafter: 2.8, builder: 2.1, farmer: 1.2, hunter: 0.4, helper: 1.1 },
+                'iron age': { builder: 2.8, farmer: 1.9, crafter: 1.8, hunter: 0.3, gatherer: -0.4, helper: 1.2 }
             }[this.getCurrentEra()] || null;
             if (eraRoleBias) {
                 for (const [role, bias] of Object.entries(eraRoleBias)) {
@@ -9257,15 +10364,63 @@
             return clamp((scores[role] || 0) / max, 0, 1);
         }
 
+        getBuildingToolTierRequirement(type) {
+            return BUILDING_TOOL_TIERS[type] || 'crude';
+        }
+
+        getAvailableBuildingToolTierRank() {
+            const hammerCapRank = getTierRank(this.getEraItemTierCap('hammer'));
+            const stoneToolCapRank = getTierRank(this.getEraItemTierCap('stoneTool'));
+            const hammerRank =
+                this.countOwnedItemsAtTier('hammer', 'fine') > 0 ? getTierRank('fine')
+                    : this.countOwnedItemsAtTier('hammer', 'standard') > 0 ? getTierRank('standard')
+                    : this.countOwnedItemsAtTier('hammer', 'crude') > 0 ? getTierRank('crude')
+                    : -1;
+            const stoneToolRank =
+                this.countOwnedItemsAtTier('stoneTool', 'fine') > 0 ? getTierRank('fine')
+                    : this.countOwnedItemsAtTier('stoneTool', 'standard') > 0 ? getTierRank('standard')
+                    : this.countOwnedItemsAtTier('stoneTool', 'crude') > 0 ? getTierRank('crude')
+                    : -1;
+            return Math.max(
+                hammerRank >= 0 ? Math.min(hammerRank, hammerCapRank) : -1,
+                stoneToolRank >= 0 ? Math.min(stoneToolRank, stoneToolCapRank) : -1
+            );
+        }
+
+        hasRequiredBuildingToolTier(type) {
+            const requiredTier = this.getBuildingToolTierRequirement(type);
+            return this.getAvailableBuildingToolTierRank() >= getTierRank(requiredTier);
+        }
+
+        getDesiredBuildingToolTier() {
+            let desired = 'crude';
+            const upgradeTargets = Object.keys(BUILDING_UPGRADES);
+            for (const type of upgradeTargets) {
+                if (this.getUpgradeableBuilding(type)) {
+                    const required = this.getBuildingToolTierRequirement(type);
+                    if (getTierRank(required) > getTierRank(desired)) {
+                        desired = required;
+                    }
+                }
+            }
+            return desired;
+        }
+
         canPursueBuilding(type) {
+            if (!this.hasReachedEraRequirement(type)) {
+                return false;
+            }
             if (this.isBuildingSoftCapped(type)) {
+                return false;
+            }
+            if (!this.hasRequiredBuildingToolTier(type)) {
                 return false;
             }
             const projected = this.getProjectedBuildingRequirements(type);
             const checks = {
                 campfire: () => this.camp.structures.firePit > 0,
                 leanTo: () => this.countCompletedAction('collectWood') >= 8 && this.camp.wood >= 6,
-                hut: () => this.countBuildings('leanTo') >= 1 && this.getCampMaterial('planks') >= 4 && this.getColonySkillAverage('building') >= 3.2,
+                hut: () => this.getUpgradeableBuilding('hut') && this.getCampMaterial('planks') >= 4 && this.getColonySkillAverage('building') >= 3.2,
                 cottage: () => this.hasTechnology('masonry') && this.countBuildings('hut') >= 1 && this.getCampMaterial('planks') >= (projected.planks || 0) && this.camp.stone >= (projected.stone || 0),
                 house: () => this.hasTechnology('engineering') && this.countBuildings('cottage') >= 1 && this.getCampMaterial('planks') >= (projected.planks || 0) && this.camp.stone >= (projected.stone || 0) && this.getCampMaterial('rope') >= Math.max(1, projected.rope || 0),
                 fortifiedStructure: () => this.hasTechnology('militaryOrganization') && this.hasTechnology('masonry') && this.countBuildings('house') >= 1 && this.camp.stone >= (projected.stone || 0) && this.getCampMaterial('planks') >= (projected.planks || 0),
@@ -9310,6 +10465,34 @@
                 : (BUILDING_DEFS[type]?.materials || {});
         }
 
+        getLineageUpgradeCandidate(lineage) {
+            const chain = BUILDING_LINEAGES[lineage];
+            if (!chain?.length) {
+                return null;
+            }
+            for (const type of chain.slice(1)) {
+                if (this.getUpgradeableBuilding(type) && this.canPursueBuilding(type)) {
+                    return type;
+                }
+            }
+            return null;
+        }
+
+        shouldStartNewShelterLineage(housing) {
+            return (
+                !this.hasAnyLineageStructure('shelter') ||
+                (
+                    this.getLineageStarterCount('shelter') < 2 &&
+                    this.getLineageUpgradeCount('shelter') === 0 &&
+                    (housing < 1.08 || this.colonists.length > this.getBuildingCapacity())
+                )
+            );
+        }
+
+        shouldStartNewStorageLineage(stockpile) {
+            return !this.hasAnyLineageStructure('storage') && stockpile > 1.15;
+        }
+
         chooseNextProjectType() {
             const housing = this.getHousingSatisfaction();
             const stockpile = this.getStockpilePressure();
@@ -9322,8 +10505,24 @@
             const civicKnowledge = this.getSettlementKnowledgeBonus('civic');
             const defenseKnowledge = this.getSettlementKnowledgeBonus('defense');
             const phase9Ready = this.phase9.milestones.permanentSettlement || this.phase9.milestones.agriculturalStability || this.phase9.milestones.fortifiedCivilization || this.phase9.milestones.regionalPower;
+            const shelterUpgrade = this.getLineageUpgradeCandidate('shelter');
+            const storageUpgrade = this.getLineageUpgradeCandidate('storage');
+            const shouldStartShelter = this.shouldStartNewShelterLineage(housing);
+            const shouldStartStorage = this.shouldStartNewStorageLineage(stockpile);
             for (const type of this.getEraProjectPriorities()) {
                 if (!this.canPursueBuilding(type)) {
+                    continue;
+                }
+                if (type === 'leanTo' && !shouldStartShelter) {
+                    continue;
+                }
+                if (['hut', 'cottage', 'house', 'fortifiedStructure', 'stoneKeep'].includes(type) && shelterUpgrade !== type) {
+                    continue;
+                }
+                if ((type === 'storage' || type === 'storagePit') && !shouldStartStorage) {
+                    continue;
+                }
+                if (['granary', 'warehouse'].includes(type) && storageUpgrade !== type) {
                     continue;
                 }
                 if (type === 'farmPlot' && (stockpile > 1.1 || this.countBuildings('farmPlot') < 1)) {
@@ -9372,13 +10571,16 @@
                     return type;
                 }
             }
-            if ((housing < 1.08 || (winterized && stability > 0.62) || housingKnowledge >= 1.5) && this.getUpgradeableBuilding('cottage') && this.canPursueBuilding('cottage')) {
+            if (
+                (housing < 1.08 || (winterized && stability > 0.62) || housingKnowledge >= 1.5) &&
+                shelterUpgrade === 'cottage'
+            ) {
                 return 'cottage';
             }
-            if (this.countBuildings('storagePit') < 1 && stockpile > 1.8 && this.canPursueBuilding('storagePit')) {
+            if (shouldStartStorage && this.canPursueBuilding('storagePit') && this.hasReachedEraRequirement('storagePit') && stockpile > 1.8) {
                 return 'storagePit';
             }
-            if (this.getUpgradeableBuilding('granary') && this.canPursueBuilding('granary') && (this.camp.food > this.getStorageCapacity() * 0.45 || storageKnowledge >= 1.5)) {
+            if (storageUpgrade === 'granary' && (this.camp.food > this.getStorageCapacity() * 0.45 || storageKnowledge >= 1.5)) {
                 return 'granary';
             }
             if (this.countBuildings('watchtower') < 1 && this.canPursueBuilding('watchtower')) {
@@ -9393,16 +10595,16 @@
             if (this.camp.structures.firePit > 0 && this.countBuildings('campfire') < 1 && this.canPursueBuilding('campfire')) {
                 return 'campfire';
             }
-            if ((housing < 1.08 || this.colonists.length > this.getBuildingCapacity()) && this.countBuildings('leanTo') < Math.max(2, Math.ceil(this.colonists.length / 4)) && this.canPursueBuilding('leanTo')) {
+            if (shouldStartShelter && this.canPursueBuilding('leanTo')) {
                 return 'leanTo';
             }
-            if ((housing < 1 || this.colonists.length >= 4) && this.countBuildings('hut') < 1 && this.canPursueBuilding('hut')) {
+            if ((housing < 1 || this.colonists.length >= 4) && shelterUpgrade === 'hut') {
                 return 'hut';
             }
             if (stockpile > 2.5 && this.countBuildings('farmPlot') < 2 && this.canPursueBuilding('farmPlot')) {
                 return 'farmPlot';
             }
-            if (this.countBuildings('storage') < 1 && (this.camp.food + this.camp.water + this.camp.wood + this.camp.stone) > this.getStorageCapacity() * 0.55 && this.canPursueBuilding('storage')) {
+            if (shouldStartStorage && (this.camp.food + this.camp.water + this.camp.wood + this.camp.stone) > this.getStorageCapacity() * 0.55 && this.canPursueBuilding('storage')) {
                 return 'storage';
             }
             if (this.countBuildings('workshop') < 1 && this.canPursueBuilding('workshop')) {
@@ -9414,7 +10616,7 @@
             if ((this.countBuildings('farmPlot') >= 1 || this.camp.food > 20 || civicKnowledge >= 1.5) && this.countBuildings('mill') < 1 && this.canPursueBuilding('mill')) {
                 return 'mill';
             }
-            if ((housing < 1.12 || stability > 0.58 || this.families.length >= 1 || housingKnowledge >= 2.2 || regionalConflict > 0.66) && this.getUpgradeableBuilding('house') && this.canPursueBuilding('house')) {
+            if ((housing < 1.12 || stability > 0.58 || this.families.length >= 1 || housingKnowledge >= 2.2 || regionalConflict > 0.66) && shelterUpgrade === 'house') {
                 return 'house';
             }
             if (this.countBuildings('wall') < 1 && this.canPursueBuilding('wall')) {
@@ -9426,7 +10628,7 @@
             if ((housing < 1.02 || (stability > 0.64 && predatorPressure > 4) || defenseKnowledge >= 2 || regionalConflict > 0.58) && this.getUpgradeableBuilding('fortifiedStructure') && this.canPursueBuilding('fortifiedStructure')) {
                 return 'fortifiedStructure';
             }
-            if (this.getUpgradeableBuilding('warehouse') && this.canPursueBuilding('warehouse') && (this.camp.food > this.getStorageCapacity() * 0.25 || stability > 0.58 || storageKnowledge >= 2 || regionalConflict > 0.52)) {
+            if (storageUpgrade === 'warehouse' && (this.camp.food > this.getStorageCapacity() * 0.25 || stability > 0.58 || storageKnowledge >= 2 || regionalConflict > 0.52)) {
                 return 'warehouse';
             }
             if (phase9Ready && this.canPursueBuilding('engineeredFarm') && (
@@ -9461,7 +10663,7 @@
             )) {
                 return 'stoneKeep';
             }
-            if (housing < 0.82 && this.countBuildings('hut') < 2 && this.canPursueBuilding('hut')) {
+            if (housing < 0.82 && shelterUpgrade === 'hut') {
                 return 'hut';
             }
             return null;
@@ -9595,6 +10797,217 @@
             }
         }
 
+        isPointInsideFootprint(type, anchor, point) {
+            if (!anchor || !point) {
+                return false;
+            }
+            const span = this.getPlacementSpan(type);
+            const left = anchor.gridCol * CELL_WIDTH;
+            const top = anchor.gridRow * CELL_HEIGHT;
+            return point.x >= left &&
+                point.x < left + span.cols * CELL_WIDTH &&
+                point.y >= top &&
+                point.y < top + span.rows * CELL_HEIGHT;
+        }
+
+        isProjectClearableResource(resource) {
+            return resource && resource.type !== 'water';
+        }
+
+        getProjectClearingTargets(type, anchor) {
+            if (!anchor) {
+                return [];
+            }
+            return this.resources
+                .filter((resource) =>
+                    !resource.depleted &&
+                    this.isPointInsideFootprint(type, anchor, resource) &&
+                    this.isProjectClearableResource(resource)
+                )
+                .map((resource) => resource.id);
+        }
+
+        hasBlockingUnclearableResource(type, anchor) {
+            if (!anchor) {
+                return false;
+            }
+            return this.resources.some((resource) =>
+                !resource.depleted &&
+                this.isPointInsideFootprint(type, anchor, resource) &&
+                !this.isProjectClearableResource(resource)
+            );
+        }
+
+        getProjectFootprintCells(type, anchor) {
+            if (!anchor) {
+                return [];
+            }
+            const span = this.getPlacementSpan(type);
+            const cells = [];
+            for (let row = 0; row < span.rows; row += 1) {
+                for (let col = 0; col < span.cols; col += 1) {
+                    const gridCol = anchor.gridCol + col;
+                    const gridRow = anchor.gridRow + row;
+                    const cell = this.cells[gridRow * GRID_COLS + gridCol];
+                    if (cell) {
+                        cells.push(cell);
+                    }
+                }
+            }
+            return cells;
+        }
+
+        hasBlockingUnclearableTerrain(type, anchor) {
+            return this.getProjectFootprintCells(type, anchor).some((cell) =>
+                cell.biome === 'water' || cell.biome === 'valley'
+            );
+        }
+
+        getProjectClearingCells(type, anchor) {
+            return this.getProjectFootprintCells(type, anchor)
+                .filter((cell) => cell.biome !== 'water' && cell.biome !== 'valley')
+                .map((cell) => ({ gridCol: cell.col, gridRow: cell.row }));
+        }
+
+        prepareBuildFootprintCell(cell, options = {}) {
+            if (!cell || !cell.terrain || cell.biome === 'water' || cell.biome === 'valley') {
+                return false;
+            }
+            const centerX = cell.x + CELL_WIDTH * 0.5;
+            const centerY = cell.y + CELL_HEIGHT * 0.5;
+            const markCleared = options.markCleared || options.built || false;
+            if (markCleared) {
+                if (cell.biome === 'forest') {
+                    this.markForestClearingAt(centerX, centerY);
+                } else if (cell.biome === 'rocky') {
+                    cell.terrain.quarried = true;
+                    cell.biome = 'grassland';
+                }
+                cell.terrain.cleared = true;
+            }
+            cell.terrain.preparedBuildSite = true;
+            cell.terrain.noResourceSpawn = true;
+            cell.terrain.pathWear = Math.max(cell.terrain.pathWear || 0, options.built ? 0.74 : 0.52);
+            cell.terrain.roadLevel = Math.max(cell.terrain.roadLevel || 0, options.built ? 0.18 : 0.08);
+            if (options.built) {
+                cell.terrain.builtFootprint = true;
+            }
+            if (markCleared || options.removeResources) {
+                for (const resource of this.resources) {
+                    if (
+                        resource &&
+                        !resource.removedByBuildSite &&
+                        this.getCellAt(resource.x, resource.y) === cell &&
+                        resource.type !== 'water'
+                    ) {
+                        resource.depleted = true;
+                        resource.amount = 0;
+                        resource.respawnTimer = 999999;
+                        resource.removedByBuildSite = true;
+                    }
+                }
+            }
+            return true;
+        }
+
+        prepareBuildFootprint(type, anchor, options = {}) {
+            for (const cell of this.getProjectFootprintCells(type, anchor)) {
+                this.prepareBuildFootprintCell(cell, options);
+            }
+        }
+
+        initializeProjectClearing(project) {
+            if (!project || project.targetBuildingType) {
+                return;
+            }
+            const anchor = this.getEntryAnchor(project, project.type);
+            if (!Array.isArray(project.clearingTargets)) {
+                project.clearingTargets = this.getProjectClearingTargets(project.type, anchor);
+            }
+            if (!Array.isArray(project.clearingCells)) {
+                project.clearingCells = this.getProjectClearingCells(project.type, anchor);
+            }
+            project.totalClearingTargets = Math.max(project.totalClearingTargets || 0, project.clearingTargets.length);
+            project.totalClearingCells = Math.max(project.totalClearingCells || 0, project.clearingCells.length);
+        }
+
+        getNextProjectClearingTarget(project) {
+            this.initializeProjectClearing(project);
+            if (!project?.clearingTargets?.length) {
+                return null;
+            }
+            project.clearingTargets = project.clearingTargets.filter((id) => {
+                const resource = this.resources.find((entry) => entry.id === id);
+                return resource && !resource.depleted;
+            });
+            if (!project.clearingTargets.length) {
+                return null;
+            }
+            return this.resources.find((resource) => resource.id === project.clearingTargets[0]) || null;
+        }
+
+        getNextProjectClearingCell(project) {
+            this.initializeProjectClearing(project);
+            if (!project?.clearingCells?.length) {
+                return null;
+            }
+            project.clearingCells = project.clearingCells.filter((entry) => {
+                const cell = this.cells[entry.gridRow * GRID_COLS + entry.gridCol];
+                return cell && !cell.terrain?.cleared;
+            });
+            if (!project.clearingCells.length) {
+                return null;
+            }
+            const entry = project.clearingCells[0];
+            const cell = this.cells[entry.gridRow * GRID_COLS + entry.gridCol];
+            return cell ? {
+                gridCol: entry.gridCol,
+                gridRow: entry.gridRow,
+                x: cell.x + CELL_WIDTH * 0.5,
+                y: cell.y + CELL_HEIGHT * 0.5
+            } : null;
+        }
+
+        clearProjectCell(project, gridCol, gridRow, colonist) {
+            const cell = this.cells[gridRow * GRID_COLS + gridCol];
+            if (!this.prepareBuildFootprintCell(cell, { markCleared: true })) {
+                return false;
+            }
+            if (project?.clearingCells) {
+                project.clearingCells = project.clearingCells.filter((entry) =>
+                    entry.gridCol !== gridCol || entry.gridRow !== gridRow
+                );
+            }
+            colonist?.gainSkill('building', 0.25);
+            return true;
+        }
+
+        clearProjectResource(resource, project, colonist) {
+            if (!resource || resource.depleted) {
+                return false;
+            }
+            const materialYield = {
+                trees: { wood: 3, logs: 2, fiber: 1 },
+                fallenWood: { wood: 2, logs: 2 },
+                stone: { stone: 2 },
+                looseStone: { stone: 1 },
+                berries: { food: 1.5 }
+            }[resource.type] || {};
+            if (materialYield.wood) this.camp.wood += materialYield.wood;
+            if (materialYield.stone) this.camp.stone += materialYield.stone;
+            if (materialYield.food) this.camp.food += materialYield.food;
+            if (materialYield.logs) this.addCampMaterial('logs', materialYield.logs);
+            if (materialYield.fiber) this.addCampMaterial('fiber', materialYield.fiber);
+            this.prepareBuildFootprintCell(this.getCellAt(resource.x, resource.y), { removeResources: true });
+            this.triggerRespawnCooldown(resource);
+            if (project?.clearingTargets) {
+                project.clearingTargets = project.clearingTargets.filter((id) => id !== resource.id);
+            }
+            colonist?.gainSkill('building', 0.35);
+            this.pushEvent(`${colonist?.name || 'Builders'} cleared ${resource.displayName || resource.type} from the ${project?.type || 'building'} site.`);
+            return true;
+        }
+
         assignEntryAnchor(entry, type, anchor) {
             if (!entry || !anchor) {
                 return;
@@ -9629,9 +11042,12 @@
 
         normalizePlacedStructureFootprints() {
             const occupied = new Set();
-            const place = (entry, type) => {
+            const place = (entry, type, options = {}) => {
                 const span = this.getPlacementSpan(type);
                 if (span.cols === 1 && span.rows === 1 && !Number.isFinite(entry.gridCol) && !Number.isFinite(entry.gridRow)) {
+                    if (options.markTerrain) {
+                        this.prepareBuildFootprint(type, this.getEntryAnchor(entry, type), { built: options.built });
+                    }
                     return;
                 }
                 const existingAnchor = Number.isFinite(entry.gridCol) && Number.isFinite(entry.gridRow)
@@ -9643,20 +11059,217 @@
                 }
                 this.assignEntryAnchor(entry, type, anchor);
                 this.markFootprint(type, anchor, occupied);
+                if (options.markTerrain) {
+                    this.prepareBuildFootprint(type, anchor, { built: options.built });
+                }
             };
             for (const building of this.buildings) {
-                place(building, building.type);
+                place(building, building.type, { markTerrain: true, built: true });
             }
             for (const project of this.projects) {
                 if (project.targetBuildingId) {
                     continue;
                 }
-                place(project, project.type);
+                place(project, project.type, { markTerrain: true, built: false });
             }
         }
 
         getPlacementRadius(type) {
             return BUILDING_FOOTPRINTS[type] || 30;
+        }
+
+        getResourcePlacementRadius(type) {
+            const radii = {
+                water: 30,
+                trees: 24,
+                stone: 22,
+                berries: 18,
+                fallenWood: 16,
+                looseStone: 16
+            };
+            return radii[type] || 18;
+        }
+
+        getCreaturePlacementRadius(type = 'animal') {
+            return type === 'predator' ? 22 : 18;
+        }
+
+        isNoResourceTerrainBlocked(x, y, radius = 0) {
+            const minCol = clamp(Math.floor((x - radius) / CELL_WIDTH), 0, GRID_COLS - 1);
+            const maxCol = clamp(Math.floor((x + radius) / CELL_WIDTH), 0, GRID_COLS - 1);
+            const minRow = clamp(Math.floor((y - radius) / CELL_HEIGHT), 0, GRID_ROWS - 1);
+            const maxRow = clamp(Math.floor((y + radius) / CELL_HEIGHT), 0, GRID_ROWS - 1);
+            for (let row = minRow; row <= maxRow; row += 1) {
+                for (let col = minCol; col <= maxCol; col += 1) {
+                    const cell = this.cells[row * GRID_COLS + col];
+                    if (cell?.terrain?.noResourceSpawn || cell?.terrain?.preparedBuildSite || cell?.terrain?.builtFootprint) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        isWorldPlacementOpen(x, y, radius = 18, options = {}) {
+            const padding = options.padding ?? 8;
+            const point = { x, y };
+            if (
+                x < CELL_WIDTH * VALLEY_RING_CELLS ||
+                y < CELL_HEIGHT * VALLEY_RING_CELLS ||
+                x > this.width - CELL_WIDTH * VALLEY_RING_CELLS ||
+                y > this.height - CELL_HEIGHT * VALLEY_RING_CELLS
+            ) {
+                return false;
+            }
+            if (!options.allowCamp && distance(point, this.camp) < radius + 46 + padding) {
+                return false;
+            }
+            if (options.blockNoResourceTerrain) {
+                if (this.isNoResourceTerrainBlocked(x, y, radius)) {
+                    return false;
+                }
+            }
+            if (!options.allowResources) {
+                for (const resource of this.resources) {
+                    if (resource.id === options.ignoreResourceId || resource.depleted) {
+                        continue;
+                    }
+                    if (distance(point, resource) < radius + this.getResourcePlacementRadius(resource.type) + padding) {
+                        return false;
+                    }
+                }
+            }
+            if (!options.allowBuildings) {
+                for (const building of this.buildings) {
+                    if (building.id === options.ignoreBuildingId) {
+                        continue;
+                    }
+                    if (distance(point, building) < radius + this.getPlacementRadius(building.type) + padding) {
+                        return false;
+                    }
+                }
+                for (const project of this.projects) {
+                    if (project.id === options.ignoreProjectId) {
+                        continue;
+                    }
+                    if (distance(point, project) < radius + this.getPlacementRadius(project.type) + padding) {
+                        return false;
+                    }
+                }
+            }
+            if (!options.allowCreatures) {
+                for (const animal of this.animals) {
+                    if (animal.id === options.ignoreAnimalId || animal.depleted) {
+                        continue;
+                    }
+                    if (distance(point, animal) < radius + this.getCreaturePlacementRadius('animal') + padding) {
+                        return false;
+                    }
+                }
+                for (const predator of this.predators) {
+                    if (predator.id === options.ignorePredatorId || predator.depleted) {
+                        continue;
+                    }
+                    if (distance(point, predator) < radius + this.getCreaturePlacementRadius('predator') + padding) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        shouldCenterResourceOnTile(type) {
+            return ['fallenWood', 'trees', 'looseStone', 'stone'].includes(type);
+        }
+
+        getCellCenterPoint(x, y) {
+            const cell = this.getCellAt(x, y);
+            if (!cell) {
+                return {
+                    x: clamp(x, 30, this.width - 30),
+                    y: clamp(y, 30, this.height - 30)
+                };
+            }
+            return {
+                x: cell.x + CELL_WIDTH * 0.5,
+                y: cell.y + CELL_HEIGHT * 0.5
+            };
+        }
+
+        findOpenWorldPlacement(origin, radius = 18, options = {}) {
+            if (!origin) {
+                return null;
+            }
+            const baseX = clamp(origin.x, 30, this.width - 30);
+            const baseY = clamp(origin.y, 30, this.height - 30);
+            const baseSite = options.snapToCellCenter ? this.getCellCenterPoint(baseX, baseY) : { x: baseX, y: baseY };
+            if (this.isWorldPlacementOpen(baseSite.x, baseSite.y, radius, options)) {
+                return baseSite;
+            }
+            const attempts = options.attempts || 18;
+            const spread = options.spread || Math.max(radius * 1.8, 32);
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                const angle = this.rng() * Math.PI * 2;
+                const distanceOut = spread + attempt * Math.max(6, radius * 0.55);
+                const x = clamp(baseX + Math.cos(angle) * distanceOut, 30, this.width - 30);
+                const y = clamp(baseY + Math.sin(angle) * distanceOut, 30, this.height - 30);
+                const site = options.snapToCellCenter ? this.getCellCenterPoint(x, y) : { x, y };
+                if (this.isWorldPlacementOpen(site.x, site.y, radius, options)) {
+                    return site;
+                }
+            }
+            return null;
+        }
+
+        placeResourceIfOpen(id, type, x, y, amount, biome, options = {}) {
+            const radius = options.radius || this.getResourcePlacementRadius(type);
+            const site = this.findOpenWorldPlacement({ x, y }, radius, {
+                padding: options.padding ?? 8,
+                attempts: options.attempts ?? 12,
+                spread: options.spread,
+                allowCreatures: options.allowCreatures || false,
+                allowBuildings: options.allowBuildings || false,
+                allowResources: options.allowResources || false,
+                allowCamp: options.allowCamp || false,
+                blockNoResourceTerrain: options.blockNoResourceTerrain ?? true,
+                snapToCellCenter: options.snapToCellCenter ?? this.shouldCenterResourceOnTile(type)
+            });
+            if (!site) {
+                return null;
+            }
+            const resource = this.makeResource(id, type, site.x, site.y, amount, biome);
+            this.resources.push(resource);
+            return resource;
+        }
+
+        placeAnimalIfOpen(id, x, y, biome, options = {}) {
+            const site = this.findOpenWorldPlacement({ x, y }, this.getCreaturePlacementRadius('animal'), {
+                padding: options.padding ?? 10,
+                attempts: options.attempts ?? 10,
+                spread: options.spread,
+                allowCamp: options.allowCamp || false
+            });
+            if (!site) {
+                return null;
+            }
+            const animal = this.makeAnimal(id, site.x, site.y, biome);
+            this.animals.push(animal);
+            return animal;
+        }
+
+        placePredatorIfOpen(id, x, y, biome, options = {}) {
+            const site = this.findOpenWorldPlacement({ x, y }, this.getCreaturePlacementRadius('predator'), {
+                padding: options.padding ?? 10,
+                attempts: options.attempts ?? 10,
+                spread: options.spread,
+                allowCamp: options.allowCamp || false
+            });
+            if (!site) {
+                return null;
+            }
+            const predator = this.makePredator(id, site.x, site.y, biome);
+            this.predators.push(predator);
+            return predator;
         }
 
         getWorkingSiteRadius(type) {
@@ -9711,6 +11324,13 @@
             if (!this.isProjectSiteWithinWorkingRange(type, x, y)) {
                 return false;
             }
+            const anchor = this.snapProjectSiteToGrid(type, x, y);
+            if (this.hasBlockingUnclearableTerrain(type, anchor)) {
+                return false;
+            }
+            if (this.hasBlockingUnclearableResource(type, anchor)) {
+                return false;
+            }
             const radius = this.getPlacementRadius(type);
             const ignoreProjectId = options.ignoreProjectId || null;
             const ignoreBuildingId = options.ignoreBuildingId || null;
@@ -9732,6 +11352,16 @@
                 if (distance({ x, y }, project) < radius + otherRadius + padding) {
                     return false;
                 }
+            }
+            if (!this.isWorldPlacementOpen(x, y, radius, {
+                padding,
+                ignoreBuildingId,
+                ignoreProjectId,
+                allowBuildings: true,
+                allowResources: true,
+                allowCamp: true
+            })) {
+                return false;
             }
             return true;
         }
@@ -9785,10 +11415,29 @@
                 requirements,
                 delivered,
                 buildProgress: 0,
-                buildTime: site.targetBuildingType ? Math.max(2, def.buildTime * 0.72) : def.buildTime
+                buildTime: site.targetBuildingType
+                    ? Math.max(2, def.buildTime * this.getUpgradeBuildTimeMultiplier(type, site.targetBuildingType))
+                    : def.buildTime
             };
+            if (!project.targetBuildingType) {
+                const anchor = this.getEntryAnchor(project, project.type);
+                project.clearingTargets = this.getProjectClearingTargets(project.type, anchor);
+                project.clearedTiles = 0;
+                project.totalClearingTargets = project.clearingTargets.length;
+                project.clearingCells = this.getProjectClearingCells(project.type, anchor);
+                project.totalClearingCells = project.clearingCells.length;
+            } else {
+                project.clearingTargets = [];
+                project.clearedTiles = 0;
+                project.totalClearingTargets = 0;
+                project.clearingCells = [];
+                project.totalClearingCells = 0;
+            }
             if (!project.targetBuildingType && !this.isProjectSiteOpen(type, project.x, project.y, { ignoreProjectId: project.id })) {
                 return null;
+            }
+            if (!project.targetBuildingType) {
+                this.prepareBuildFootprint(project.type, this.getEntryAnchor(project, project.type));
             }
             this.projects.push(project);
             this.pushEvent(project.targetBuildingType
@@ -9824,12 +11473,67 @@
             return Math.max(0, this.getConstructionDemand(material) - this.getConstructionMaterialAvailable(material));
         }
 
+        getDesiredWaterReserve() {
+            return clamp(4 + this.colonists.length * 0.45, 4, 18);
+        }
+
+        getDesiredFoodReserve() {
+            const season = this.getSeason().name;
+            const seasonalBonus = season === 'Winter' ? 4 : season === 'Autumn' ? 2 : 0;
+            return clamp(5 + this.colonists.length * 0.5 + seasonalBonus, 5, 24);
+        }
+
+        getAutoAidFoodThreshold() {
+            return Math.max(48, this.getDesiredFoodReserve() + 20);
+        }
+
+        getAutoAidWaterThreshold() {
+            return Math.max(18, this.getDesiredWaterReserve() + 8);
+        }
+
+        buildCarryDeliveryPlan(colonist) {
+            if (!colonist?.carrying?.type || colonist.carrying.amount <= 0) {
+                return null;
+            }
+            if (colonist.carrying.projectId) {
+                const project = this.projects.find((entry) => entry.id === colonist.carrying.projectId);
+                if (project) {
+                    return [{
+                        kind: 'resource',
+                        entity: project,
+                        duration: 0.8,
+                        action: 'deliverProjectMaterial',
+                        projectId: project.id,
+                        material: colonist.carrying.type,
+                        amount: colonist.carrying.amount
+                    }];
+                }
+                colonist.carrying.projectId = null;
+            }
+            const stockpileSite = this.getStockpileSite();
+            const destination = stockpileSite === this.camp
+                ? { kind: 'camp', duration: 0.8 }
+                : { kind: 'resource', entity: stockpileSite, duration: 0.8 };
+            switch (colonist.carrying.type) {
+                case 'water':
+                    return [{ ...destination, action: 'deliverWater' }];
+                case 'food':
+                    return [{ ...destination, action: 'deliverFood' }];
+                case 'wood':
+                    return [{ ...destination, action: 'deliverWood' }];
+                case 'stone':
+                    return [{ ...destination, action: 'deliverStone' }];
+                default:
+                    return null;
+            }
+        }
+
         getDesiredWoodReserve() {
-            const populationReserve = Math.ceil(this.colonists.length * 0.35);
-            const fireReserve = this.camp.fireFuel < 10 ? 6 : 3;
+            const populationReserve = Math.ceil(this.colonists.length * 0.1);
+            const fireReserve = this.getCampMaterial('logs') < 6 ? 3 : 1;
             const constructionReserve = Math.ceil(this.getConstructionMaterialNeed('wood'));
-            const eraBonus = this.hasTechnology('engineering') ? 4 : this.hasTechnology('masonry') ? 2 : 0;
-            return clamp(8 + populationReserve + fireReserve + constructionReserve + eraBonus, 8, 28);
+            const eraBonus = this.hasTechnology('engineering') ? 1 : this.hasTechnology('masonry') ? 1 : 0;
+            return clamp(2 + populationReserve + fireReserve + constructionReserve + eraBonus, 2, 12);
         }
 
         getWoodShortfall() {
@@ -9885,6 +11589,7 @@
 
         getProjectPendingMaterial(project) {
             const requirements = this.getProjectRequirements(project);
+            const haulMultiplier = this.getStorageHaulMultiplier();
             for (const [material, amount] of Object.entries(requirements)) {
                 const delivered = project.delivered[material] || 0;
                 const remaining = Math.max(0, amount - delivered);
@@ -9895,7 +11600,8 @@
                 if (available <= 0) {
                     continue;
                 }
-                const stepAmount = Math.min(remaining, available, material === 'wood' ? 4 : material === 'stone' ? 2 : 1);
+                const baseStep = material === 'wood' ? 4 : material === 'stone' ? 2 : 1;
+                const stepAmount = Math.min(remaining, available, Math.max(1, Math.round(baseStep * haulMultiplier)));
                 return { material, amount: stepAmount };
             }
             return null;
@@ -9924,6 +11630,18 @@
             const project = this.projects[0];
             if (!project) {
                 return null;
+            }
+            const clearingTarget = this.getNextProjectClearingTarget(project);
+            if (clearingTarget) {
+                return [
+                    { kind: 'resource', entity: clearingTarget, duration: this.getActionDuration(colonist, 'building', 1.8, 'clearProjectSite'), action: 'clearProjectSite', projectId: project.id, resourceId: clearingTarget.id }
+                ];
+            }
+            const clearingCell = this.getNextProjectClearingCell(project);
+            if (clearingCell) {
+                return [
+                    { kind: 'resource', entity: clearingCell, duration: this.getActionDuration(colonist, 'building', 1.2, 'clearProjectTile'), action: 'clearProjectTile', projectId: project.id, gridCol: clearingCell.gridCol, gridRow: clearingCell.gridRow }
+                ];
             }
             const pending = this.getProjectPendingMaterial(project);
             if (pending) {
@@ -9983,7 +11701,9 @@
                         }
                     }
                     this.pushEvent(`${colonist.name} upgraded the ${previousType} into a ${project.type}.`);
+                    this.prepareBuildFootprint(project.type, this.getEntryAnchor(target, project.type), { built: true });
                     this.applyTerraformingAroundBuilding(target);
+                    this.assignFamilyHomes();
                     this.evaluateLegacyMilestones();
                     return target;
                 }
@@ -10008,7 +11728,7 @@
             this.buildings.push(building);
             colonist.gainSkill('building', 0.9);
             if (project.type === 'campfire') {
-                this.camp.fireFuel += 4;
+                this.addCampMaterial('logs', 2);
             }
             if (
                 project.type === 'leanTo' ||
@@ -10033,7 +11753,9 @@
                 this.camp.shelter = clamp(this.camp.shelter + shelterGain, 0, 100);
             }
             this.pushEvent(`${colonist.name} finished a ${project.type}.`);
+            this.prepareBuildFootprint(building.type, this.getEntryAnchor(building, building.type), { built: true });
             this.applyTerraformingAroundBuilding(building);
+            this.assignFamilyHomes();
             this.evaluateLegacyMilestones();
             return building;
         }
@@ -10109,21 +11831,29 @@
 
         updateLandUse(dt = 1 / 30) {
             for (const cell of this.cells) {
-                const traffic = Math.max(0, (cell.terrain.traffic || 0) - dt * 0.0035);
+                const traffic = Math.max(0, (cell.terrain.traffic || 0) - dt * 0.0012);
                 cell.terrain.traffic = traffic;
+                const previousWear = cell.terrain.pathWear || 0;
                 const desiredWear = clamp(
-                    traffic * 0.11 +
-                    (cell.terrain.cleared ? 0.04 : 0) +
+                    traffic * 0.035 +
+                    (cell.terrain.cleared ? 0.015 : 0) +
                     (cell.terrain.irrigation ? 0.03 : 0),
                     0,
                     1
                 );
-                cell.terrain.pathWear = lerp(cell.terrain.pathWear || 0, desiredWear, dt * 0.22);
+                const recoveryRate = cell.biome === 'forest' ? 0.00012 : cell.biome === 'fertile' ? 0.00022 : 0.0003;
+                cell.terrain.pathWear = desiredWear > previousWear
+                    ? lerp(previousWear, desiredWear, dt * 0.025)
+                    : Math.max(0, previousWear - dt * recoveryRate);
+                const trafficRoadPressure = clamp((cell.terrain.pathWear - 0.72) * 1.3 + traffic * 0.012, 0, 1);
                 if (this.hasTechnology('engineering') || this.hasTechnology('storagePlanning')) {
-                    const roadPressure = clamp(traffic * (this.hasTechnology('engineering') ? 0.14 : 0.08), 0, 1);
+                    const roadPressure = Math.max(
+                        trafficRoadPressure,
+                        clamp(traffic * (this.hasTechnology('engineering') ? 0.14 : 0.08), 0, 1)
+                    );
                     cell.terrain.roadLevel = lerp(cell.terrain.roadLevel || 0, roadPressure, dt * 0.18);
                 } else {
-                    cell.terrain.roadLevel = Math.max(0, (cell.terrain.roadLevel || 0) - dt * 0.01);
+                    cell.terrain.roadLevel = lerp(cell.terrain.roadLevel || 0, Math.min(0.45, trafficRoadPressure), dt * 0.08);
                 }
                 if ((cell.terrain.pathWear || 0) > 0.28 && cell.biome === 'forest' && !cell.terrain.marsh) {
                     cell.terrain.cleared = true;
@@ -10415,7 +12145,7 @@
             this.landUse = {
                 farmingZones: this.buildings.filter((building) => building.type === 'farmPlot').map((building) => ({ x: building.x, y: building.y, radius: 32 })),
                 gatheringZones: this.resources
-                    .filter((resource) => !resource.depleted && (resource.type === 'berries' || resource.type === 'trees' || resource.type === 'stone'))
+                    .filter((resource) => !resource.depleted && (resource.type === 'berries' || resource.type === 'fallenWood' || resource.type === 'trees' || resource.type === 'looseStone' || resource.type === 'stone'))
                     .slice(0, 5)
                     .map((resource) => ({ x: resource.x, y: resource.y, type: resource.type, radius: 30 })),
                 huntingZones: this.animals
@@ -10442,24 +12172,34 @@
             };
         }
 
-        findPlantingSpot() {
+        findPlantingSpot(colonist = null) {
             const fertileCell = this.cells
-                .filter((cell) =>
-                    cell.biome === 'fertile' && (() => {
-                        const cellCenter = { x: cell.x + CELL_WIDTH * 0.5, y: cell.y + CELL_HEIGHT * 0.5 };
-                        const cellDistance = distance(cellCenter, this.camp);
-                        return cellDistance >= this.getWorkingSiteMinDistance('farmPlot') &&
-                            cellDistance <= this.getWorkingSiteRadius('farmPlot');
-                    })()
+                .map((cell) => ({
+                    cell,
+                    center: { x: cell.x + CELL_WIDTH * 0.5, y: cell.y + CELL_HEIGHT * 0.5 }
+                }))
+                .filter(({ cell, center }) =>
+                    cell.biome === 'fertile' &&
+                    distance(center, this.camp) >= this.getWorkingSiteMinDistance('farmPlot') &&
+                    distance(center, this.camp) <= this.getWorkingSiteRadius('farmPlot') &&
+                    this.isWorldPlacementOpen(center.x, center.y, 12, { allowCamp: false, allowResources: false, allowCreatures: true })
                 )
-                .sort((a, b) =>
-                    distance({ x: a.x + CELL_WIDTH * 0.5, y: a.y + CELL_HEIGHT * 0.5 }, this.camp) -
-                    distance({ x: b.x + CELL_WIDTH * 0.5, y: b.y + CELL_HEIGHT * 0.5 }, this.camp)
-                )[0];
+                .sort((a, b) => {
+                    const aScore =
+                        distance(a.center, this.camp) +
+                        (colonist ? distance(a.center, colonist) * 0.12 : 0) +
+                        this.getPointAssignmentPenalty(a.center, colonist, { action: 'plantTrial', radius: 30 });
+                    const bScore =
+                        distance(b.center, this.camp) +
+                        (colonist ? distance(b.center, colonist) * 0.12 : 0) +
+                        this.getPointAssignmentPenalty(b.center, colonist, { action: 'plantTrial', radius: 30 });
+                    return aScore - bScore;
+                })[0]?.cell;
             if (!fertileCell) {
+                const spread = colonist ? ((colonist.id % 5) - 2) * 18 : 0;
                 return {
                     x: clamp(this.camp.x + Math.max(55, this.getWorkingSiteMinDistance('farmPlot') + 10), 30, this.width - 30),
-                    y: clamp(this.camp.y - 35, 30, this.height - 30)
+                    y: clamp(this.camp.y - 35 + spread, 30, this.height - 30)
                 };
             }
             return {
@@ -10474,14 +12214,15 @@
             const existing = this.resources.find((resource) => resource.type === 'berries' && distance(resource, { x, y }) < 28);
             if (!existing) {
                 const hasHoe = Boolean(colonist?.equipment?.farming?.type === 'hoe');
-                this.resources.push(this.makeResource(
+                this.placeResourceIfOpen(
                     this.nextResourceId++,
                     'berries',
                     x,
                     y,
                     hasHoe ? 28 : 18,
-                    'fertile'
-                ));
+                    'fertile',
+                    { attempts: 8, spread: 18, padding: 6 }
+                );
             }
         }
 
@@ -10628,7 +12369,9 @@
                     continue;
                 }
                 const nextDistance = distance(origin, resource);
-                const nextScore = nextDistance + this.getDangerPenalty(resource, origin);
+                const amountValue = resource.amount * 0.8;
+                const assignmentPenalty = this.getEntityAssignmentPenalty(resource, origin);
+                const nextScore = nextDistance + assignmentPenalty + this.getDangerPenalty(resource, origin) - amountValue;
                 if (nextScore < bestDistance) {
                     best = resource;
                     bestDistance = nextScore;
@@ -10644,9 +12387,25 @@
             };
         }
 
+        isWaterResourceBlockingCell(col, row) {
+            const cell = this.cells[row * GRID_COLS + col];
+            if (!cell) {
+                return false;
+            }
+            const center = {
+                x: cell.x + CELL_WIDTH * 0.5,
+                y: cell.y + CELL_HEIGHT * 0.5
+            };
+            return this.resources.some((resource) =>
+                resource.type === 'water' &&
+                !resource.depleted &&
+                distance(resource, center) < this.getResourcePlacementRadius('water') * 0.9
+            );
+        }
+
         isWalkable(col, row) {
             const cell = this.cells[row * GRID_COLS + col];
-            return cell && cell.biome !== 'water' && cell.biome !== 'valley';
+            return cell && cell.biome !== 'valley' && !this.isWaterResourceBlockingCell(col, row);
         }
 
         getMoveCost(col, row) {
@@ -10654,13 +12413,16 @@
             if (!cell) {
                 return Infinity;
             }
-            if (cell.biome === 'water') {
-                return Infinity;
-            }
             if (cell.biome === 'valley') {
                 return Infinity;
             }
+            if (this.isWaterResourceBlockingCell(col, row)) {
+                return Infinity;
+            }
             const weatherPenalty = this.getWeatherStateAt(cell.x + CELL_WIDTH * 0.5, cell.y + CELL_HEIGHT * 0.5).movementPenalty;
+            if (cell.biome === 'water') {
+                return 1.15 + weatherPenalty * 1.05;
+            }
             if (cell.terrain?.marsh && !cell.terrain?.drained) {
                 return 2.4 + weatherPenalty * 1.25;
             }
@@ -10721,29 +12483,53 @@
                 }
 
                 const neighbors = [
-                    { col: current.col + 1, row: current.row },
-                    { col: current.col - 1, row: current.row },
-                    { col: current.col, row: current.row + 1 },
-                    { col: current.col, row: current.row - 1 }
+                    { col: current.col + 1, row: current.row, diagonal: false },
+                    { col: current.col - 1, row: current.row, diagonal: false },
+                    { col: current.col, row: current.row + 1, diagonal: false },
+                    { col: current.col, row: current.row - 1, diagonal: false },
+                    { col: current.col + 1, row: current.row + 1, diagonal: true },
+                    { col: current.col - 1, row: current.row + 1, diagonal: true },
+                    { col: current.col + 1, row: current.row - 1, diagonal: true },
+                    { col: current.col - 1, row: current.row - 1, diagonal: true }
                 ];
 
                 for (const neighbor of neighbors) {
                     if (neighbor.col < 0 || neighbor.col >= GRID_COLS || neighbor.row < 0 || neighbor.row >= GRID_ROWS) {
                         continue;
                     }
-                    if (!this.isWalkable(neighbor.col, neighbor.row)) {
+                    const isGoalCell = neighbor.col === goal.col && neighbor.row === goal.row;
+                    const cell = this.cells[neighbor.row * GRID_COLS + neighbor.col];
+                    if (!cell || cell.biome === 'valley') {
+                        continue;
+                    }
+                    if (!isGoalCell && !this.isWalkable(neighbor.col, neighbor.row)) {
+                        continue;
+                    }
+                    if (
+                        neighbor.diagonal &&
+                        (
+                            !this.isWalkable(current.col, neighbor.row) ||
+                            !this.isWalkable(neighbor.col, current.row)
+                        )
+                    ) {
                         continue;
                     }
                     const neighborKey = keyForCell(neighbor.col, neighbor.row);
+                    const moveCost = isGoalCell
+                        ? Math.min(this.getMoveCost(neighbor.col, neighbor.row), 1.2)
+                        : this.getMoveCost(neighbor.col, neighbor.row);
+                    if (!Number.isFinite(moveCost)) {
+                        continue;
+                    }
                     const tentative = (gScore.get(currentKey) ?? Infinity) +
-                        this.getMoveCost(neighbor.col, neighbor.row) +
+                        moveCost * (neighbor.diagonal ? Math.SQRT2 : 1) +
                         this.getPathDangerCost(neighbor.col, neighbor.row, from);
                     if (tentative >= (gScore.get(neighborKey) ?? Infinity)) {
                         continue;
                     }
                     cameFrom.set(neighborKey, current);
                     gScore.set(neighborKey, tentative);
-                    const heuristic = Math.abs(goal.col - neighbor.col) + Math.abs(goal.row - neighbor.row);
+                    const heuristic = Math.hypot(goal.col - neighbor.col, goal.row - neighbor.row);
                     open.push({ col: neighbor.col, row: neighbor.row, f: tentative + heuristic });
                 }
             }
@@ -10883,14 +12669,15 @@
             if (active <= 0) {
                 return 0;
             }
+            const population = Math.max(1, this.colonists.filter((colonist) => colonist.alive).length);
             const limits = {
-                drink: 1,
-                haulWater: 2,
-                eat: 1,
-                forage: 2,
-                gatherWood: 1,
-                gatherStone: 1,
-                hunt: 1
+                drink: Math.max(2, Math.ceil(population / 10)),
+                haulWater: Math.max(2, Math.ceil(population / 12)),
+                eat: Math.max(2, Math.ceil(population / 10)),
+                forage: Math.max(2, Math.ceil(population / 12)),
+                gatherWood: Math.max(1, Math.ceil(population / 20)),
+                gatherStone: Math.max(1, Math.ceil(population / 24)),
+                hunt: Math.max(1, Math.ceil(population / 24))
             };
             const limit = limits[intent] ?? 1;
             return active <= limit ? 0 : (active - limit) * 18;
@@ -10899,6 +12686,95 @@
         getFailurePenalty(colonist, action) {
             const failed = colonist.memory.failedActions[action] || 0;
             return Math.min(24, failed * 4);
+        }
+
+        getActionRoleWeights(action) {
+            const key = this.normalizeActionMemoryKey(action);
+            switch (key) {
+                case 'plant':
+                    return { farmer: 1 };
+                case 'build':
+                    return { builder: 1 };
+                case 'forage':
+                    return { gatherer: 1 };
+                case 'hunt':
+                    return { hunter: 1 };
+                case 'craft':
+                case 'process':
+                case 'repair':
+                    return { crafter: 1 };
+                case 'tend':
+                    return { helper: 1 };
+                case 'socialize':
+                    return { helper: 0.75 };
+                case 'haulWater':
+                    return { helper: 0.55, gatherer: 0.35 };
+                default:
+                    return null;
+            }
+        }
+
+        recordRoleProgress(colonist, action, success = true) {
+            const weights = this.getActionRoleWeights(action);
+            if (!weights) {
+                return;
+            }
+            colonist.roleDisposition = {
+                ...createRoleTracker(0),
+                ...(colonist.roleDisposition || {})
+            };
+            colonist.rolePractice = {
+                ...createRoleTracker(0),
+                ...(colonist.rolePractice || {})
+            };
+            for (const [role, weight] of Object.entries(weights)) {
+                if (!weight) {
+                    continue;
+                }
+                const delta = success ? 0.028 * weight : -0.012 * weight;
+                colonist.roleDisposition[role] = clamp((colonist.roleDisposition[role] || 0) + delta, 0, 1.5);
+                if (success) {
+                    colonist.rolePractice[role] = (colonist.rolePractice[role] || 0) + weight;
+                }
+            }
+        }
+
+        getSocialDecisionBias(colonist, action) {
+            const key = this.normalizeActionMemoryKey(action);
+            const social = colonist.socialDisposition || {};
+            const helpfulness = social.helpfulness || 0;
+            const selfishness = social.selfishness || 0;
+            switch (key) {
+                case 'tend':
+                case 'socialize':
+                case 'haulWater':
+                    return helpfulness * 10 - selfishness * 7;
+                case 'forage':
+                case 'hunt':
+                case 'build':
+                case 'craft':
+                case 'process':
+                    return helpfulness * 2 - selfishness * 2;
+                case 'eat':
+                case 'drink':
+                case 'sleep':
+                    return selfishness * 2.5 - helpfulness * 1.5;
+                default:
+                    return 0;
+            }
+        }
+
+        recordSocialDrift(colonist, deltas = {}) {
+            colonist.socialDisposition = {
+                ...createSocialDisposition(this.rng, colonist.traits || {}),
+                ...(colonist.socialDisposition || {})
+            };
+            for (const [key, delta] of Object.entries(deltas)) {
+                if (!(key in colonist.socialDisposition) || !delta) {
+                    continue;
+                }
+                colonist.socialDisposition[key] = clamp(colonist.socialDisposition[key] + delta, 0, 1.5);
+            }
         }
 
         normalizeActionMemoryKey(action) {
@@ -10916,6 +12792,7 @@
                 warmHome: 'warm',
                 sleepCamp: 'sleep',
                 sleepHome: 'sleep',
+                restCamp: 'rest',
                 tendWounds: 'tend',
                 collectWood: 'gatherWood',
                 deliverWood: 'gatherWood',
@@ -10928,6 +12805,7 @@
                 waterCrop: 'plant',
                 harvestCrop: 'plant',
                 socializeWithPeer: 'socialize',
+                aidPeer: 'tend',
                 huntAnimal: 'hunt',
                 huntMeal: 'hunt',
                 attackPredator: 'protect',
@@ -11150,36 +13028,49 @@
             const extremes = clamp((this.phase9?.pressure?.weatherExtremes || 0) * this.getSimulationKnob('weatherSeverity'), 0, 1);
             const roll = this.rng();
             if (season === 'Winter') {
-                const coldSnap = 0.28 + extremes * 0.12;
-                const storm = coldSnap + 0.18 + extremes * 0.06;
-                const rain = storm + 0.14 - extremes * 0.05;
+                const coldSnap = 0.34 + extremes * 0.14;
+                const storm = coldSnap + 0.2 + extremes * 0.06;
+                const rain = storm + 0.12 - extremes * 0.05;
                 const cloudy = rain + 0.18;
-                if (roll < coldSnap) return WEATHER_TYPES[4];
-                if (roll < storm) return WEATHER_TYPES[3];
-                if (roll < rain) return WEATHER_TYPES[2];
-                if (roll < cloudy) return WEATHER_TYPES[1];
-                return WEATHER_TYPES[0];
+                if (roll < coldSnap) return WEATHER_TYPE_LOOKUP['cold snap'];
+                if (roll < storm) return WEATHER_TYPE_LOOKUP.storm;
+                if (roll < rain) return WEATHER_TYPE_LOOKUP.rain;
+                if (roll < cloudy) return WEATHER_TYPE_LOOKUP.cloudy;
+                return WEATHER_TYPE_LOOKUP.clear;
             }
             if (season === 'Summer') {
                 const drought = 0.18 + extremes * 0.16;
                 const storm = drought + 0.14 + extremes * 0.06;
                 const rain = storm + 0.14 - extremes * 0.06;
                 const cloudy = rain + 0.18;
-                if (roll < drought) return WEATHER_TYPES[5];
-                if (roll < storm) return WEATHER_TYPES[3];
-                if (roll < rain) return WEATHER_TYPES[2];
-                if (roll < cloudy) return WEATHER_TYPES[1];
-                return WEATHER_TYPES[0];
+                if (roll < drought) return WEATHER_TYPE_LOOKUP.drought;
+                if (roll < storm) return WEATHER_TYPE_LOOKUP.storm;
+                if (roll < rain) return WEATHER_TYPE_LOOKUP.rain;
+                if (roll < cloudy) return WEATHER_TYPE_LOOKUP.cloudy;
+                return WEATHER_TYPE_LOOKUP.clear;
+            }
+            if (season === 'Autumn') {
+                const coldSnap = 0.12 + extremes * 0.08;
+                const storm = coldSnap + 0.14 + extremes * 0.06;
+                const rain = storm + 0.18;
+                const fog = rain + 0.14;
+                const cloudy = fog + 0.22;
+                if (roll < coldSnap) return WEATHER_TYPE_LOOKUP['cold snap'];
+                if (roll < storm) return WEATHER_TYPE_LOOKUP.storm;
+                if (roll < rain) return WEATHER_TYPE_LOOKUP.rain;
+                if (roll < fog) return WEATHER_TYPE_LOOKUP.fog;
+                if (roll < cloudy) return WEATHER_TYPE_LOOKUP.cloudy;
+                return WEATHER_TYPE_LOOKUP.clear;
             }
             const rain = 0.16 - extremes * 0.04;
             const storm = rain + 0.1 + extremes * 0.08;
             const drought = storm + 0.07 + extremes * 0.06;
             const cloudy = drought + 0.22;
-            if (roll < rain) return WEATHER_TYPES[2];
-            if (roll < storm) return WEATHER_TYPES[3];
-            if (roll < drought) return WEATHER_TYPES[5];
-            if (roll < cloudy) return WEATHER_TYPES[1];
-            return WEATHER_TYPES[0];
+            if (roll < rain) return WEATHER_TYPE_LOOKUP.rain;
+            if (roll < storm) return WEATHER_TYPE_LOOKUP.storm;
+            if (roll < drought) return WEATHER_TYPE_LOOKUP.drought;
+            if (roll < cloudy) return WEATHER_TYPE_LOOKUP.cloudy;
+            return WEATHER_TYPE_LOOKUP.clear;
         }
 
         getTemperatureAt(x, y) {
@@ -11197,7 +13088,52 @@
                             ? 1
                             : 0;
             const shelterBonus = distance({ x, y }, this.camp) < 75 ? this.camp.shelter * 0.05 : 0;
-            return season.temperature + weather.temperature + dayFactor + biomeFactor + shelterBonus;
+            const seasonalBite = season.name === 'Winter'
+                ? -4
+                : season.name === 'Autumn'
+                    ? -1.6
+                    : 0;
+            return season.temperature + weather.temperature + seasonalBite + dayFactor + biomeFactor + shelterBonus;
+        }
+
+        getSeasonalColdMultiplier(seasonName = this.getSeason().name) {
+            if (seasonName === 'Winter') {
+                return 1.55;
+            }
+            if (seasonName === 'Autumn') {
+                return 1.22;
+            }
+            return 1;
+        }
+
+        getColdProtectionMultiplier(colonist = null) {
+            const clothing = colonist?.equipment?.clothing;
+            let protection = 1;
+            if (clothing?.type === 'furClothing') {
+                protection *= 0.48;
+            } else if (clothing?.type === 'simpleClothing') {
+                protection *= 0.68;
+            }
+            if (this.hasTechnology('insulation')) {
+                protection *= 0.86;
+            }
+            protection *= 1 - (colonist?.traits?.endurance || 0) * 0.08;
+            return clamp(protection, 0.34, 1);
+        }
+
+        getColdExposureSeverity(colonist = null, context = {}) {
+            const temperature = Number.isFinite(context.temperature)
+                ? context.temperature
+                : this.getTemperatureAt(colonist?.x ?? this.camp.x, colonist?.y ?? this.camp.y);
+            const weather = context.weather || this.getWeather();
+            const season = context.season || this.getSeason();
+            const weatherState = context.weatherState || this.getWeatherStateAt(colonist?.x ?? this.camp.x, colonist?.y ?? this.camp.y);
+            const wetness = weather.name === 'Rain' || weather.name === 'Storm'
+                ? 0.34
+                : (weatherState?.surfaceWetness || 0) * 0.18;
+            const wind = (weatherState?.gustStrength || 0) * 0.16;
+            const seasonal = this.getSeasonalColdMultiplier(season.name);
+            return clamp(((8 - temperature) / 16 + wetness + wind) * weather.warmth * seasonal, 0, 3.4);
         }
 
         getLightLevel() {
@@ -11217,7 +13153,7 @@
             if (!cell?.terrain) {
                 return;
             }
-            cell.terrain.traffic = clamp((cell.terrain.traffic || 0) + amount, 0, 8);
+            cell.terrain.traffic = clamp((cell.terrain.traffic || 0) + amount * 0.14, 0, 8);
         }
 
         recordTrafficAlongSegment(start, end, amount = 0.06) {
@@ -11475,7 +13411,7 @@
                 }
                 if (distance(colonist, resource) <= 60) {
                     this.rememberResource(resource, colonist);
-                    this.noteDiscovery(`resource:${resource.type}`, `${colonist.name} discovered ${resource.type}.`);
+                    this.noteDiscovery(resource.discoveryKey || `resource:${resource.type}`, `${colonist.name} discovered ${resource.displayName || resource.type}.`);
                 }
             }
             for (const animal of this.animals) {
@@ -11537,6 +13473,7 @@
             this.colonyKnowledge.failedActions[action] = (this.colonyKnowledge.failedActions[action] || 0) + 1;
             const key = this.normalizeActionMemoryKey(action);
             colonist.memory.actionConfidence[key] = clamp((colonist.memory.actionConfidence[key] || 0) - 0.12, -1, 1);
+            this.recordRoleProgress(colonist, action, false);
         }
 
         recordSuccessfulAction(colonist, action) {
@@ -11545,6 +13482,7 @@
             colonist.memory.actionConfidence = colonist.memory.actionConfidence || {};
             colonist.memory.successfulActions[key] = (colonist.memory.successfulActions[key] || 0) + 1;
             colonist.memory.actionConfidence[key] = clamp((colonist.memory.actionConfidence[key] || 0) + 0.08, -1, 1);
+            this.recordRoleProgress(colonist, action, true);
         }
 
         noteDiscovery(key, message) {
@@ -11987,8 +13925,10 @@
                 waterCrop: 'farming',
                 harvestCrop: 'farming',
                 tendWounds: 'medicine',
+                aidPeer: 'medicine',
                 attackPredator: 'combat',
-                collectWater: 'survival'
+                collectWater: 'survival',
+                restCamp: 'survival'
             };
             return mapping[action] || null;
         }
@@ -12034,6 +13974,9 @@
             if (colonist.lastDamageCause === 'lightningStrike') {
                 return 'lightningStrike';
             }
+            if (colonist.lastDamageCause === 'disease') {
+                return 'disease';
+            }
             const stats = colonist.stats;
             const lowest = Math.min(stats.hunger, stats.thirst, stats.warmth, stats.energy);
             switch (lowest) {
@@ -12054,6 +13997,7 @@
                 case 'starvation': return 'Food patches need to be stocked before hunger spikes.';
                 case 'exposure': return 'Cold nights punish weak shelter and low fire fuel.';
                 case 'exhaustion': return 'Rest has to happen before collapse sets in.';
+                case 'disease': return 'Sickness punishes weak health, hunger, and poor care.';
                 case 'predatorAttack': return 'Predators force distance, fear, and retreat.';
                 case 'lightningStrike': return 'Storms punish exposed ground and weak shelter.';
                 default: return 'The colony needs better survival habits.';
@@ -12335,6 +14279,11 @@
             this.landUse = clone(state.landUse || this.landUse);
             this.landUseRebuildCooldown = 0;
             this.camp = clone(state.camp || this.camp);
+            this.camp.materials = {
+                ...createMaterialInventory(),
+                ...clone(this.camp.materials || {})
+            };
+            delete this.camp['fire' + 'Fuel'];
             this.terrain = clone(state.terrain || null);
             this.resources = clone(state.resources || []);
             this.animals = clone(state.animals || []);
@@ -12570,18 +14519,24 @@
         }
 
         spawnFoodNearCamp() {
-            const node = this.makeResource(this.nextResourceId++, 'berries', this.camp.x + 80, this.camp.y - 40, 24, 'fertile');
-            this.resources.push(node);
-            this.pushEvent('Fresh berries appeared near camp.');
+            const node = this.placeResourceIfOpen(this.nextResourceId++, 'berries', this.camp.x + 80, this.camp.y - 40, 24, 'fertile', {
+                attempts: 14,
+                spread: 28,
+                padding: 8
+            });
+            this.pushEvent(node ? 'Fresh berries appeared near camp.' : 'No open ground was found for fresh berries.');
         }
 
         spawnWaterSourceNearSelection() {
             const target = this.selectedEntity && this.selectedEntity !== this.camp ? this.selectedEntity : this.camp;
             const x = clamp(target.x + 50, CELL_WIDTH * (VALLEY_RING_CELLS + 1), this.width - CELL_WIDTH * (VALLEY_RING_CELLS + 1));
             const y = clamp(target.y - 40, CELL_HEIGHT * (VALLEY_RING_CELLS + 1), this.height - CELL_HEIGHT * (VALLEY_RING_CELLS + 1));
-            const node = this.makeResource(this.nextResourceId++, 'water', x, y, 100, 'water');
-            this.resources.push(node);
-            this.pushEvent('A fresh water source appeared.');
+            const node = this.placeResourceIfOpen(this.nextResourceId++, 'water', x, y, 100, 'water', {
+                attempts: 14,
+                spread: 36,
+                padding: 12
+            });
+            this.pushEvent(node ? 'A fresh water source appeared.' : 'No open ground was found for fresh water.');
         }
 
         blessHarvest() {
@@ -12643,45 +14598,87 @@
             return false;
         }
 
+        getLivingColonists() {
+            return this.colonists.filter((colonist) => colonist.alive);
+        }
+
+        getRandomLivingColonist() {
+            const living = this.getLivingColonists();
+            if (!living.length) {
+                return null;
+            }
+            return living[Math.floor(this.rng() * living.length)];
+        }
+
         cureDisease() {
             this.phase9.pressure.disease = Math.max(0, this.phase9.pressure.disease - 0.28);
             this.phase9.cooldowns.disease = Math.max(0, this.phase9.cooldowns.disease - 12);
             for (const colonist of this.colonists) {
                 if (!colonist.alive) continue;
                 colonist.stats.health = clamp(colonist.stats.health + 10, 0, 100);
+                colonist.sicknessTtl = 0;
+                colonist.exposureSickness = 0;
             }
             this.pushEvent('A divine cure swept sickness from the colony.');
         }
 
         triggerDiseaseOutbreak() {
-            this.phase9.pressure.disease = clamp(this.phase9.pressure.disease + 0.26, 0, 1);
-            this.phase9.cooldowns.disease = 18;
-            for (const colonist of this.colonists) {
-                if (!colonist.alive) continue;
-                colonist.stats.health = clamp(colonist.stats.health - 5, 0, 100);
-                colonist.stats.morale = clamp(colonist.stats.morale - 4, 0, 100);
+            const living = this.getLivingColonists();
+            if (!living.length) {
+                this.pushEvent('No living colonists remain for disease to touch.');
+                return false;
             }
-            this.pushEvent('A divine plague spread through the settlement.');
+            this.phase9.pressure.disease = clamp(Math.max(this.phase9.pressure.disease, 0.72) + 0.18, 0, 1);
+            this.phase9.cooldowns.disease = 28;
+            let deaths = 0;
+            for (const colonist of living) {
+                const resilience =
+                    colonist.stats.health * 0.34 +
+                    colonist.stats.energy * 0.18 +
+                    colonist.stats.hunger * 0.12 +
+                    colonist.stats.thirst * 0.14 +
+                    colonist.stats.warmth * 0.1 +
+                    colonist.traits.endurance * 22 +
+                    (colonist.skills.medicine || 0) * 1.8;
+                const damage = clamp(16 + this.rng() * 14 + Math.max(0, 72 - resilience) * 0.62, 10, 74);
+                colonist.lastDamageCause = 'disease';
+                colonist.sicknessTtl = Math.max(colonist.sicknessTtl || 0, 90);
+                colonist.stats.health = clamp(colonist.stats.health - damage, 0, 100);
+                colonist.stats.energy = clamp(colonist.stats.energy - damage * 0.28, 0, 100);
+                colonist.stats.morale = clamp(colonist.stats.morale - 9, 0, 100);
+                colonist.woundSeverity = clamp((colonist.woundSeverity || 0) + damage / 180, 0, 1);
+                colonist.decisionCooldown = 0;
+                if (colonist.stats.health <= 0) {
+                    colonist.alive = false;
+                    deaths += 1;
+                }
+            }
+            this.pushEvent(deaths > 0
+                ? `A divine plague ravaged the colony; ${deaths} colonist${deaths === 1 ? '' : 's'} died and the strongest endured.`
+                : 'A divine plague tested the colony; the strongest endured.');
+            return true;
         }
 
         spreadSicknessAtSelection() {
-            const target = this.selectedEntity && this.selectedEntity !== this.camp ? this.selectedEntity : this.camp;
-            const radius = target === this.camp ? 120 : 96;
-            const affected = this.colonists.filter((colonist) =>
-                colonist.alive && distance(colonist, target) <= radius
-            );
-            if (affected.length === 0) {
-                this.pushEvent('No one was close enough to sicken.');
+            const colonist = this.getRandomLivingColonist();
+            if (!colonist) {
+                this.pushEvent('No living colonists remain to sicken.');
                 return false;
             }
-            this.phase9.pressure.disease = clamp(this.phase9.pressure.disease + 0.1, 0, 1);
-            this.phase9.cooldowns.disease = Math.max(this.phase9.cooldowns.disease || 0, 10);
-            for (const colonist of affected) {
-                colonist.stats.health = clamp(colonist.stats.health - 8, 0, 100);
-                colonist.stats.morale = clamp(colonist.stats.morale - 6, 0, 100);
-                colonist.decisionCooldown = 0;
+            const damage = clamp(14 + this.rng() * 12 + Math.max(0, 45 - colonist.stats.health) * 0.25, 12, 34);
+            this.phase9.pressure.disease = clamp(this.phase9.pressure.disease + 0.14, 0, 1);
+            this.phase9.cooldowns.disease = Math.max(this.phase9.cooldowns.disease || 0, 14);
+            colonist.lastDamageCause = 'disease';
+            colonist.sicknessTtl = Math.max(colonist.sicknessTtl || 0, 72);
+            colonist.stats.health = clamp(colonist.stats.health - damage, 0, 100);
+            colonist.stats.energy = clamp(colonist.stats.energy - 10, 0, 100);
+            colonist.stats.morale = clamp(colonist.stats.morale - 7, 0, 100);
+            colonist.woundSeverity = clamp((colonist.woundSeverity || 0) + 0.12, 0, 1);
+            colonist.decisionCooldown = 0;
+            if (colonist.stats.health <= 0) {
+                colonist.alive = false;
             }
-            this.pushEvent(`A divine sickness spread through ${affected.length} nearby colonist${affected.length === 1 ? '' : 's'}.`);
+            this.pushEvent(`${colonist.name} was struck by divine sickness.`);
             return true;
         }
 
@@ -12733,22 +14730,70 @@
             const x = clamp(this.camp.x + Math.cos(angle) * radius, 36, this.width - 36);
             const y = clamp(this.camp.y + Math.sin(angle) * radius, 36, this.height - 36);
             const predatorId = this.predators.reduce((maxId, predator) => Math.max(maxId, predator.id || 0), 0) + 1;
-            this.predators.push(this.makePredator(predatorId, x, y, this.getCellAt(x, y).biome));
-            this.pushEvent('A predator was summoned near the settlement.');
+            const predator = this.placePredatorIfOpen(predatorId, x, y, this.getCellAt(x, y).biome, { attempts: 12, spread: 40 });
+            this.pushEvent(predator ? 'A predator was summoned near the settlement.' : 'No open ground was found for a predator.');
         }
 
         createRelicObjective() {
             const target = this.selectedEntity && this.selectedEntity !== this.camp ? this.selectedEntity : this.camp;
+            const gift = this.createEraRelicGift();
             const relic = {
                 id: `relic:${this.elapsed.toFixed(2)}:${this.rng().toFixed(3)}`,
                 x: clamp(target.x + 36, 24, this.width - 24),
                 y: clamp(target.y + 18, 24, this.height - 24),
-                label: 'Relic',
+                label: gift.label,
                 ttl: 9999
             };
             this.godMode.relics.unshift(relic);
             this.godMode.relics = this.godMode.relics.slice(0, 6);
-            this.pushEvent('A strange relic descended into the world.');
+            this.pushEvent(`A divine relic descended: ${gift.message}`);
+        }
+
+        createEraRelicGift() {
+            const era = this.getCurrentEra();
+            const bestCrafter = this.colonists
+                .filter((colonist) => colonist.alive)
+                .sort((left, right) => (right.skills.crafting || 0) - (left.skills.crafting || 0))[0];
+            const skill = Math.max(bestCrafter?.skills.crafting || 0, era === 'survival' ? 1 : era === 'toolmaking' ? 4 : 9);
+            const addItem = (type) => this.createCampItem(type, skill);
+            if (era === 'survival') {
+                this.camp.stone = Math.max(this.camp.stone || 0, 2);
+                this.addCampMaterial('logs', Math.max(0, 2 - this.getCampMaterial('logs')));
+                addItem('stick');
+                addItem('stoneTool');
+                this.noteDiscovery('skill:tool_use', 'A relic showed the colony how stone and wood can become tools.');
+                return { label: 'Relic: First Tool', message: 'first-tool knowledge and a crude stone tool appeared.' };
+            }
+            if (era === 'toolmaking') {
+                addItem('axe');
+                addItem('hammer');
+                this.unlockTechnology('toolmaking', 'A relic affirmed the colony’s toolmaking path.');
+                this.noteDiscovery('skill:tool_use', 'A relic revealed stronger working tools.');
+                return { label: 'Relic: Working Tools', message: 'an axe and hammer appeared for the toolmakers.' };
+            }
+            if (era === 'agriculture') {
+                addItem('hoe');
+                addItem('basket');
+                this.unlockTechnology('agriculture', 'A relic taught the rhythm of planting and carrying harvests.');
+                this.noteDiscovery('skill:planting', 'A relic taught field tending.');
+                return { label: 'Relic: Field Kit', message: 'farm tools and field knowledge appeared.' };
+            }
+            if (era === 'masonry') {
+                addItem('hammer');
+                addItem('hammer');
+                this.unlockTechnology('masonry', 'A relic carried the memory of shaped stone.');
+                return { label: 'Relic: Mason Kit', message: 'worked hammers and masonry knowledge appeared.' };
+            }
+            if (era === 'engineering') {
+                addItem('hammer');
+                addItem('hoe');
+                this.unlockTechnology('engineering', 'A relic sketched roads, mills, and stronger works.');
+                return { label: 'Relic: Engineer Kit', message: 'fine engineering tools and plans appeared.' };
+            }
+            addItem('hammer');
+            addItem('spear');
+            this.unlockTechnology(era === 'iron age' ? 'ironAge' : era === 'bronze age' ? 'bronzeAge' : 'metallurgy', 'A relic carried advanced metalworking memory.');
+            return { label: 'Relic: Metal Memory', message: 'advanced tools and metalworking memory appeared.' };
         }
 
         terraformLandAtSelection() {
@@ -12799,7 +14844,15 @@
                     resource.type === 'water' && !resource.depleted && distance(resource, { x: target.x, y: target.y }) < 30
                 );
                 if (!nearbyWater) {
-                    this.resources.push(this.makeResource(this.nextResourceId++, 'water', cell.x + CELL_WIDTH * 0.5, cell.y + CELL_HEIGHT * 0.5, 100, 'water'));
+                    this.placeResourceIfOpen(
+                        this.nextResourceId++,
+                        'water',
+                        cell.x + CELL_WIDTH * 0.5,
+                        cell.y + CELL_HEIGHT * 0.5,
+                        100,
+                        'water',
+                        { attempts: 10, spread: 28, padding: 12, allowCamp: false }
+                    );
                 }
             }
             this.pushEvent(`Divine terrain paint turned the land into ${nextBiome}.`);
@@ -12813,28 +14866,17 @@
         }
 
         killSelectedUnit() {
-            const target = this.selectedEntity;
-            if (!target || target === this.camp) {
-                this.pushEvent('Select a unit to kill.');
+            const target = this.getRandomLivingColonist();
+            if (!target) {
+                this.pushEvent('No living colonists remain to kill.');
                 return false;
             }
-            if (target.entityType === 'colonist') {
-                target.lastDamageCause = 'battle';
-                target.stats.health = 0;
-                target.alive = false;
-                this.pushEvent(`${target.name} was struck down by divine force.`);
-                return true;
-            }
-            if (target.type === 'predator' || target.type === 'wildAnimal') {
-                if (target.type === 'wildAnimal') {
-                    this.triggerRespawnCooldown(target);
-                } else {
-                    target.depleted = true;
-                }
-                this.pushEvent('A creature was struck down by divine force.');
-                return true;
-            }
-            return false;
+            target.lastDamageCause = 'lightningStrike';
+            target.stats.health = 0;
+            target.alive = false;
+            this.selectedEntity = target;
+            this.pushEvent(`${target.name} was chosen at random and struck down by divine force.`);
+            return true;
         }
 
         sendOmenOfPlenty() {
@@ -12913,28 +14955,22 @@
         }
 
         healSelectedUnit() {
-            const target = this.selectedEntity;
-            if (target?.entityType === 'colonist') {
-                target.stats.health = clamp(target.stats.health + 28, 0, 100);
-                target.stats.morale = clamp(target.stats.morale + 10, 0, 100);
-                target.stats.energy = clamp(target.stats.energy + 12, 0, 100);
-                target.woundSeverity = clamp((target.woundSeverity || 0) - 0.22, 0, 1);
-                target.woundCount = Math.max(0, (target.woundCount || 0) - 1);
-                this.pushEvent(`${target.name} was restored by divine healing.`);
-                return true;
-            }
-            if (target?.entityType === 'building') {
-                target.integrity = Math.min(target.maxIntegrity || target.integrity || 1, (target.integrity || 0) + Math.max(1.5, (target.maxIntegrity || 0) * 0.18));
-                this.pushEvent(`The ${target.type} was mended by divine healing.`);
-                return true;
-            }
+            this.phase9.pressure.disease = Math.max(0, this.phase9.pressure.disease - 0.4);
+            this.phase9.cooldowns.disease = Math.max(0, this.phase9.cooldowns.disease - 18);
             for (const colonist of this.colonists) {
                 if (!colonist.alive) {
                     continue;
                 }
-                colonist.stats.health = clamp(colonist.stats.health + 8, 0, 100);
+                colonist.stats.health = 100;
+                colonist.stats.energy = clamp(colonist.stats.energy + 35, 0, 100);
+                colonist.stats.morale = clamp(colonist.stats.morale + 14, 0, 100);
+                colonist.woundSeverity = 0;
+                colonist.woundCount = 0;
             }
-            this.pushEvent('A divine healing wave passed through the colony.');
+            for (const building of this.buildings) {
+                building.integrity = building.maxIntegrity || building.integrity || 1;
+            }
+            this.pushEvent('A divine healing wave fully restored the living colony.');
             return true;
         }
 
@@ -13038,11 +15074,65 @@
             return totals;
         }
 
+        getColonyRoleSummary() {
+            const counts = { farmer: 0, builder: 0, gatherer: 0, hunter: 0, crafter: 0, helper: 0 };
+            for (const colonist of this.colonists) {
+                if (!colonist.alive || colonist.lifeStage !== 'adult') {
+                    continue;
+                }
+                const role = this.getSoftRole(colonist);
+                if (role in counts) {
+                    counts[role] += 1;
+                }
+            }
+            const dominant = Object.entries(counts)
+                .sort((left, right) => right[1] - left[1])
+                .filter(([, count]) => count > 0)
+                .slice(0, 3)
+                .map(([role, count]) => `${role}:${count}`);
+            return {
+                counts,
+                dominant
+            };
+        }
+
+        getColonySocialProfile() {
+            const living = this.colonists.filter((colonist) => colonist.alive);
+            if (!living.length) {
+                return { helpfulness: 0, selfishness: 0, helpfulColonists: 0, selfishColonists: 0 };
+            }
+            let helpfulness = 0;
+            let selfishness = 0;
+            let helpfulColonists = 0;
+            let selfishColonists = 0;
+            for (const colonist of living) {
+                const social = colonist.socialDisposition || {};
+                const help = social.helpfulness || 0;
+                const self = social.selfishness || 0;
+                helpfulness += help;
+                selfishness += self;
+                if (help > self + 0.08) {
+                    helpfulColonists += 1;
+                }
+                if (self > help + 0.08) {
+                    selfishColonists += 1;
+                }
+            }
+            return {
+                helpfulness: Number((helpfulness / living.length).toFixed(2)),
+                selfishness: Number((selfishness / living.length).toFixed(2)),
+                helpfulColonists,
+                selfishColonists
+            };
+        }
+
         getSummaryText() {
             const averages = this.getAverages();
             const temperature = this.getTemperatureAt(this.camp.x, this.camp.y);
             const weatherState = this.getWeatherState();
-            const taskAllocation = { farmers: 0, builders: 0, gatherers: 0, hunters: 0, crafters: 0 };
+            const roleSummary = this.getColonyRoleSummary();
+            const socialProfile = this.getColonySocialProfile();
+            const taskAllocation = { farmers: 0, builders: 0, gatherers: 0, hunters: 0, crafters: 0, helpers: 0 };
             for (const colonist of this.colonists) {
                 const role = this.getSoftRole(colonist);
                 if (role === 'farmer') taskAllocation.farmers += 1;
@@ -13050,13 +15140,15 @@
                 if (role === 'gatherer') taskAllocation.gatherers += 1;
                 if (role === 'hunter') taskAllocation.hunters += 1;
                 if (role === 'crafter') taskAllocation.crafters += 1;
+                if (role === 'helper') taskAllocation.helpers += 1;
             }
             const laborHistory = {
                 farmers: Number(this.recentLabor.farmer.toFixed(1)),
                 builders: Number(this.recentLabor.builder.toFixed(1)),
                 gatherers: Number(this.recentLabor.gatherer.toFixed(1)),
                 hunters: Number(this.recentLabor.hunter.toFixed(1)),
-                crafters: Number(this.recentLabor.crafter.toFixed(1))
+                crafters: Number(this.recentLabor.crafter.toFixed(1)),
+                helpers: Number(this.recentLabor.helper.toFixed(1))
             };
             const foodCulture = this.getFoodCultureSummary();
             const weakest = this.colonists
@@ -13100,7 +15192,7 @@
                     wood: Number(this.camp.wood.toFixed(1)),
                     stone: Number(this.camp.stone.toFixed(1)),
                     shelter: Number(this.camp.shelter.toFixed(1)),
-                    fireFuel: Number(this.camp.fireFuel.toFixed(1)),
+                    fireLit: this.isCampFireLit(),
                     materials: Object.fromEntries(
                         Object.entries(this.camp.materials).map(([key, value]) => [key, Number(value.toFixed(1))])
                     ),
@@ -13130,7 +15222,9 @@
                         buildTime: Number(project.buildTime.toFixed(1))
                     })),
                     taskAllocation,
+                    roleSummary,
                     laborHistory,
+                    socialProfile,
                     families: this.families.map((family) => ({
                         id: family.id,
                         members: family.memberIds.length,
@@ -13419,6 +15513,19 @@
                     },
                     skills: Object.fromEntries(Object.entries(colonist.skills).map(([key, value]) => [key, Number(value.toFixed(1))])),
                     role: this.getSoftRole(colonist),
+                    roleLeanings: Object.entries(this.getRoleScores(colonist))
+                        .sort((left, right) => right[1] - left[1])
+                        .slice(0, 3)
+                        .map(([role, score]) => ({ role, score: Number(score.toFixed(2)) })),
+                    roleDisposition: Object.fromEntries(
+                        Object.entries(colonist.roleDisposition || {}).map(([key, value]) => [key, Number(value.toFixed(2))])
+                    ),
+                    rolePractice: Object.fromEntries(
+                        Object.entries(colonist.rolePractice || {}).map(([key, value]) => [key, Number(value.toFixed(1))])
+                    ),
+                    socialDisposition: Object.fromEntries(
+                        Object.entries(colonist.socialDisposition || {}).map(([key, value]) => [key, Number(value.toFixed(2))])
+                    ),
                     ageYears: Number(colonist.ageYears.toFixed(1)),
                     lifeStage: colonist.lifeStage,
                     familyId: colonist.familyId,

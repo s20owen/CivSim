@@ -113,6 +113,29 @@
             right: 3
         }
     };
+    const CUSTOM_ART_CONFIG = {
+        grassTile: { src: 'grass_tile.png' },
+        dirtTile: { src: 'dirt-tile.png' },
+        bush: { src: 'bush.png', drawWidth: 28, drawHeight: 31, anchorY: 0.78 },
+        leanTo: { src: 'leanto.png', drawWidth: 52, drawHeight: 50, anchorY: 0.72 },
+        tree: { src: 'new-tree.png', drawWidth: 42, drawHeight: 63, anchorY: 0.88 },
+        rockSmall: { src: 'rock_small.png', drawWidth: 32, drawHeight: 30, anchorY: 0.72 },
+        looseRock: { src: 'loose-rock.png', drawWidth: 35, drawHeight: 27, anchorY: 0.72 },
+        fallenLog: { src: 'fallen-log.png', drawWidth: 23, drawHeight: 19, anchorY: 0.62 },
+        forestTile: { src: 'forest.png', drawWidth: 257, drawHeight: 261, anchorY: 0.86 },
+        waterSheet: {
+            src: 'water-sheet.png',
+            frameCount: 4,
+            frameRects: [
+                { x: 0, y: 0, width: 71, height: 52 },
+                { x: 71, y: 0, width: 56, height: 42 },
+                { x: 127, y: 0, width: 41, height: 31 },
+                { x: 168, y: 0, width: 26, height: 20 }
+            ],
+            drawWidth: 44,
+            drawHeight: 48
+        }
+    };
     const ASSET_IMAGE_CACHE = new Map();
 
     function getCachedImage(src) {
@@ -152,6 +175,8 @@
             this.enemyIdleSpriteReady = false;
             this.enemyCombatSprite = null;
             this.enemyCombatSpriteReady = false;
+            this.customArt = {};
+            this.customArtReady = {};
             this.colonistSpriteState = new Map();
             this.weatherPatternCache = new Map();
             this.staticTerrainCanvas = null;
@@ -207,10 +232,27 @@
         }
 
         preloadVisualAssets() {
+            this.loadCustomArtAssets();
             this.loadStructureSprite();
             this.loadFoodStorageSprite();
             this.loadColonistSprite();
             this.loadEnemyBattleSprites();
+        }
+
+        loadCustomArtAssets() {
+            for (const [key, config] of Object.entries(CUSTOM_ART_CONFIG)) {
+                const entry = getCachedImage(config.src);
+                entry.promise.then((sprite) => {
+                    this.customArt[key] = sprite;
+                    this.customArtReady[key] = true;
+                    this.staticTerrainSignature = '';
+                    this.staticPropSignature = '';
+                    this.render();
+                }).catch(() => {
+                    this.customArt[key] = null;
+                    this.customArtReady[key] = false;
+                });
+            }
         }
 
         loadStructureSprite() {
@@ -386,6 +428,226 @@
             } finally {
                 ctx.imageSmoothingEnabled = prev;
             }
+        }
+
+        getCustomArt(key) {
+            return this.customArtReady[key] ? this.customArt[key] : null;
+        }
+
+        drawCustomArtCentered(ctx, key, x, y, options = {}) {
+            const image = this.getCustomArt(key);
+            if (!image) {
+                return false;
+            }
+            const config = CUSTOM_ART_CONFIG[key] || {};
+            const drawWidth = options.drawWidth || config.drawWidth || image.naturalWidth || image.width;
+            const drawHeight = options.drawHeight || config.drawHeight || image.naturalHeight || image.height;
+            const anchorY = options.anchorY ?? config.anchorY ?? 0.5;
+            const drawX = Math.round(x - drawWidth * 0.5);
+            const drawY = Math.round(y - drawHeight * anchorY);
+            this.withPixelatedImages(ctx, () => {
+                if (options.outlineColor) {
+                    const previousFilter = ctx.filter;
+                    ctx.save();
+                    ctx.filter = 'brightness(0) invert(1)';
+                    ctx.globalAlpha = options.outlineAlpha ?? 0.95;
+                    const outlineSize = options.outlineSize ?? 2;
+                    const offsets = [
+                        [-outlineSize, 0],
+                        [outlineSize, 0],
+                        [0, -outlineSize],
+                        [0, outlineSize],
+                        [-outlineSize, -outlineSize],
+                        [outlineSize, -outlineSize],
+                        [-outlineSize, outlineSize],
+                        [outlineSize, outlineSize]
+                    ];
+                    for (const [offsetX, offsetY] of offsets) {
+                        ctx.drawImage(image, drawX + offsetX, drawY + offsetY, drawWidth, drawHeight);
+                    }
+                    ctx.restore();
+                    ctx.filter = previousFilter;
+                }
+                ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+            });
+            return true;
+        }
+
+        getResourceUseInfo(resource) {
+            if (!resource || resource.depleted) {
+                return { active: false, shaking: false, progress: 0 };
+            }
+            const activeActions = new Set([
+                'drinkSource',
+                'collectWater',
+                'collectFood',
+                'eatAndGatherFood',
+                'collectWood',
+                'collectStone'
+            ]);
+            let active = false;
+            let shaking = false;
+            let progress = 0;
+            for (const colonist of this.world.colonists || []) {
+                if (!colonist.alive) {
+                    continue;
+                }
+                const step = colonist.plan?.[colonist.planStep];
+                if (!step || step.kind !== 'resource' || !activeActions.has(step.action)) {
+                    continue;
+                }
+                const sameResource = step.entity === resource ||
+                    (step.entity?.id === resource.id && step.entity?.type === resource.type);
+                const arrivalDistance = Math.max(30, (this.world.getResourcePlacementRadius?.(resource.type) || 18) + 12);
+                const isAtResource = distance(colonist, resource) <= arrivalDistance;
+                if (!sameResource || !isAtResource) {
+                    continue;
+                }
+                active = true;
+                const actionProgress = colonist.state === 'working' && step.duration > 0
+                    ? colonist.actionProgress / step.duration
+                    : 0.15;
+                progress = Math.max(progress, actionProgress);
+                if (
+                    colonist.state === 'working' &&
+                    (
+                        (resource.type === 'trees' && step.action === 'collectWood') ||
+                        (resource.type === 'stone' && step.action === 'collectStone')
+                    )
+                ) {
+                    shaking = true;
+                }
+            }
+            return {
+                active,
+                shaking,
+                progress: clamp(progress, 0, 1)
+            };
+        }
+
+        getResourceShakeOffset(resource, useInfo) {
+            if (!useInfo?.shaking) {
+                return { x: 0, y: 0 };
+            }
+            const pulse = Math.sin((this.world.elapsed || 0) * 28 + resource.id * 1.73);
+            const jitter = Math.sin((this.world.elapsed || 0) * 47 + resource.id * 0.91);
+            const strength = 1.2 + useInfo.progress * 1.6;
+            return {
+                x: Math.round(pulse * strength),
+                y: Math.round(jitter * strength * 0.35)
+            };
+        }
+
+        drawCustomTerrainTile(ctx, key, x, y, width = CELL_WIDTH + 1, height = CELL_HEIGHT + 1) {
+            const image = this.getCustomArt(key);
+            if (!image) {
+                return false;
+            }
+            this.withPixelatedImages(ctx, () => {
+                ctx.drawImage(image, x, y, width, height);
+            });
+            return true;
+        }
+
+        getStableVisualNoise(entity, salt = 0) {
+            const seed = ((entity?.id || 1) * 1103515245 + salt * 12345) >>> 0;
+            return ((seed ^ (seed >>> 16)) & 0xffff) / 0xffff;
+        }
+
+        getTreeDrawSize(resource) {
+            const image = this.getCustomArt('tree');
+            const config = CUSTOM_ART_CONFIG.tree;
+            const maxWidth = image?.naturalWidth || image?.width || 86;
+            const maxHeight = image?.naturalHeight || image?.height || 129;
+            const t = this.getStableVisualNoise(resource, 17);
+            return {
+                drawWidth: Math.round(config.drawWidth + (maxWidth - config.drawWidth) * t),
+                drawHeight: Math.round(config.drawHeight + (maxHeight - config.drawHeight) * t)
+            };
+        }
+
+        getWaterFrameForRatio(ratio = 1) {
+            const normalized = clamp(Number.isFinite(ratio) ? ratio : 1, 0, 1);
+            if (normalized > 0.75) return 0;
+            if (normalized > 0.5) return 1;
+            if (normalized > 0.25) return 2;
+            return 3;
+        }
+
+        drawWaterFrame(ctx, x, y, ratio = 1, options = {}) {
+            const image = this.getCustomArt('waterSheet');
+            if (!image) {
+                return false;
+            }
+            const config = CUSTOM_ART_CONFIG.waterSheet;
+            const frame = this.getWaterFrameForRatio(ratio);
+            const rect = config.frameRects?.[frame] || {
+                x: Math.round((image.width * frame) / config.frameCount),
+                y: 0,
+                width: Math.max(1, Math.round(image.width / config.frameCount)),
+                height: image.height
+            };
+            const sourceLeft = rect.x;
+            const sourceTop = rect.y || 0;
+            const sourceWidth = Math.max(1, rect.width);
+            const sourceHeight = Math.max(1, rect.height || image.height);
+            const scale = options.scale || 1;
+            const drawWidth = options.drawWidth || Math.round(sourceWidth * scale);
+            const drawHeight = options.drawHeight || Math.round(sourceHeight * scale);
+            const drawX = options.anchor === 'topLeft'
+                ? x
+                : Math.round(x - drawWidth * 0.5);
+            const drawY = options.anchor === 'topLeft'
+                ? y
+                    : frame === 0
+                        ? Math.round(y - drawHeight * 0.5)
+                        : Math.round(y - drawHeight * 0.82);
+            this.withPixelatedImages(ctx, () => {
+                if (options.outlineColor) {
+                    const previousFilter = ctx.filter;
+                    ctx.save();
+                    ctx.filter = 'brightness(0) invert(1)';
+                    ctx.globalAlpha = options.outlineAlpha ?? 0.92;
+                    const outlineSize = options.outlineSize ?? 2;
+                    const offsets = [
+                        [-outlineSize, 0],
+                        [outlineSize, 0],
+                        [0, -outlineSize],
+                        [0, outlineSize],
+                        [-outlineSize, -outlineSize],
+                        [outlineSize, -outlineSize],
+                        [-outlineSize, outlineSize],
+                        [outlineSize, outlineSize]
+                    ];
+                    for (const [offsetX, offsetY] of offsets) {
+                        ctx.drawImage(
+                            image,
+                            sourceLeft,
+                            sourceTop,
+                            sourceWidth,
+                            sourceHeight,
+                            drawX + offsetX,
+                            drawY + offsetY,
+                            drawWidth,
+                            drawHeight
+                        );
+                    }
+                    ctx.restore();
+                    ctx.filter = previousFilter;
+                }
+                ctx.drawImage(
+                    image,
+                    sourceLeft,
+                    sourceTop,
+                    sourceWidth,
+                    sourceHeight,
+                    drawX,
+                    drawY,
+                    drawWidth,
+                    drawHeight
+                );
+            });
+            return true;
         }
 
         getWeatherPatternCanvas(kind, variant = 0) {
@@ -697,7 +959,7 @@
             this.drawDynamicResources(ctx);
             this.drawSettlement(ctx);
             this.drawCamp(ctx);
-            this.drawColonists(ctx);
+            this.drawDepthSortedCanopiesAndColonists(ctx);
             this.drawBuildingRoofOverlays(ctx);
             this.drawWeatherNearGround(ctx);
             this.drawWeather(ctx);
@@ -971,6 +1233,7 @@
         drawLandUse(ctx) {
             const bounds = this.getViewBounds();
             this.drawBuildRingDebug(ctx);
+            this.drawTrafficWear(ctx, bounds);
             const occupation = this.world.warAftermath?.occupation || null;
             if (occupation && this.isCircleVisible(bounds, this.world.camp.x, this.world.camp.y, 150 + occupation.severity * 70, 32)) {
                 ctx.fillStyle = 'rgba(171, 67, 57, 0.08)';
@@ -1271,6 +1534,59 @@
             }
         }
 
+        drawTrafficWear(ctx, bounds) {
+            const dirtImage = this.getCustomArt('dirtTile');
+            for (const cell of this.world.cells) {
+                const terrain = cell.terrain || {};
+                const wear = terrain.pathWear || 0;
+                const builtFootprint = !!terrain.builtFootprint;
+                const buildSiteFootprint = builtFootprint || !!terrain.preparedBuildSite;
+                if (!buildSiteFootprint && wear < 0.18 && (terrain.roadLevel || 0) < 0.24) {
+                    continue;
+                }
+                if (cell.x + CELL_WIDTH < bounds.minX || cell.x >= bounds.maxX || cell.y + CELL_HEIGHT < bounds.minY || cell.y >= bounds.maxY) {
+                    continue;
+                }
+                const roadLevel = terrain.roadLevel || 0;
+                const dirtAlpha = buildSiteFootprint
+                    ? (builtFootprint ? 0.92 : 0.78)
+                    : clamp((wear - 0.68) / 0.28 + roadLevel * 0.2, 0, 0.82);
+                if (dirtAlpha > 0.08) {
+                    ctx.save();
+                    ctx.globalAlpha = dirtAlpha;
+                    if (dirtImage) {
+                        this.drawCustomTerrainTile(ctx, 'dirtTile', cell.x, cell.y);
+                    } else {
+                        ctx.fillStyle = '#7e6847';
+                        ctx.fillRect(cell.x, cell.y, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+                    }
+                    ctx.restore();
+                }
+
+                const scuffAlpha = buildSiteFootprint ? 0 : clamp((wear - 0.18) / 0.48, 0, 0.34);
+                if (scuffAlpha <= 0) {
+                    continue;
+                }
+                const centerY = cell.y + CELL_HEIGHT * 0.55;
+                const offset = ((cell.col * 7 + cell.row * 11) % 9) - 4;
+                ctx.strokeStyle = `rgba(91, 70, 42, ${scuffAlpha.toFixed(3)})`;
+                ctx.lineWidth = 1.2 + wear * 2.8 + roadLevel * 2;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cell.x + 6, centerY + offset);
+                ctx.quadraticCurveTo(cell.x + CELL_WIDTH * 0.5, centerY - offset * 0.45, cell.x + CELL_WIDTH - 6, centerY + offset * 0.35);
+                ctx.stroke();
+                if (roadLevel > 0.55) {
+                    ctx.strokeStyle = `rgba(61, 47, 31, ${clamp((roadLevel - 0.25) * 0.45, 0, 0.24).toFixed(3)})`;
+                    ctx.lineWidth = 1.4;
+                    ctx.beginPath();
+                    ctx.moveTo(cell.x + 8, centerY + 5 + offset * 0.2);
+                    ctx.lineTo(cell.x + CELL_WIDTH - 8, centerY + 4 - offset * 0.2);
+                    ctx.stroke();
+                }
+            }
+        }
+
         drawBuildRingDebug(ctx) {
             if (!this.world.debugFlags?.showBuildRing) {
                 return;
@@ -1306,8 +1622,22 @@
             } else if (season === 'Autumn' && cell.biome === 'forest') {
                 fill = '#8c6a2f';
             }
-            ctx.fillStyle = fill;
-            ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+            const terrainArt = cell.biome === 'water' || cell.biome === 'grassland' || cell.biome === 'fertile' || cell.biome === 'forest'
+                ? 'grassTile'
+                : cell.biome === 'rocky' || cell.biome === 'valley'
+                        ? 'dirtTile'
+                        : null;
+            const drewTerrainArt = terrainArt
+                ? this.drawCustomTerrainTile(ctx, terrainArt, localX, localY)
+                : false;
+            if (!drewTerrainArt) {
+                ctx.fillStyle = fill;
+                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+            }
+            if (drewTerrainArt && (season === 'Winter' || (season === 'Autumn' && cell.biome === 'forest'))) {
+                ctx.fillStyle = season === 'Winter' ? 'rgba(198, 211, 208, 0.34)' : 'rgba(156, 102, 42, 0.2)';
+                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+            }
 
             if (cell.biome === 'forest') {
                 ctx.fillStyle = 'rgba(28, 59, 25, 0.18)';
@@ -1322,24 +1652,6 @@
                 ctx.fillStyle = 'rgba(238, 220, 194, 0.14)';
                 ctx.fillRect(localX + 8, localY + 8, 12, 7);
                 ctx.fillRect(localX + 32, localY + 18, 14, 9);
-            } else if (cell.biome === 'water') {
-                ctx.fillStyle = '#6f8e45';
-                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
-                ctx.fillStyle = 'rgba(88, 142, 182, 0.4)';
-                const pattern = (cell.col + cell.row) % 3;
-                if (pattern === 0) {
-                    ctx.fillRect(localX + 7, localY + 10, CELL_WIDTH - 14, 8);
-                    ctx.fillRect(localX + 12, localY + 24, CELL_WIDTH - 24, 7);
-                } else if (pattern === 1) {
-                    ctx.fillRect(localX + 10, localY + 8, CELL_WIDTH - 20, 9);
-                    ctx.fillRect(localX + 5, localY + 26, CELL_WIDTH - 14, 6);
-                } else {
-                    ctx.fillRect(localX + 6, localY + 14, CELL_WIDTH - 18, 8);
-                    ctx.fillRect(localX + 16, localY + 28, CELL_WIDTH - 26, 6);
-                }
-                ctx.fillStyle = 'rgba(180, 221, 239, 0.16)';
-                ctx.fillRect(localX + 14, localY + 11, 10, 2);
-                ctx.fillRect(localX + 24, localY + 27, 8, 2);
             } else if (cell.biome === 'valley') {
                 ctx.fillStyle = 'rgba(37, 31, 22, 0.16)';
                 ctx.fillRect(localX + 4, localY + 4, CELL_WIDTH - 8, CELL_HEIGHT - 8);
@@ -1439,47 +1751,291 @@
                 if (resource.x < bounds.minX || resource.x >= bounds.maxX || resource.y < bounds.minY || resource.y >= bounds.maxY) {
                     continue;
                 }
+                if (resource.type === 'trees') {
+                    continue;
+                }
+                const useInfo = this.getResourceUseInfo(resource);
+                const shake = this.getResourceShakeOffset(resource, useInfo);
+                const drawX = resource.x + shake.x;
+                const drawY = resource.y + shake.y;
+                const artOptions = useInfo.active ? {
+                    outlineColor: '#ffffff',
+                    outlineAlpha: 0.95,
+                    outlineSize: 2
+                } : {};
                 if (resource.type === 'water') {
+                    const waterRatio = resource.maxAmount > 0 ? resource.amount / resource.maxAmount : 1;
+                    if (this.drawWaterFrame(ctx, drawX, drawY, waterRatio, artOptions)) {
+                        continue;
+                    }
                     ctx.fillStyle = '#83cceb';
                     ctx.beginPath();
-                    ctx.arc(resource.x, resource.y, 10, 0, Math.PI * 2);
+                    ctx.arc(drawX, drawY, 10, 0, Math.PI * 2);
                     ctx.fill();
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
                     ctx.fillStyle = 'rgba(255,255,255,0.28)';
-                    ctx.fillRect(resource.x - 4, resource.y - 3, 8, 3);
+                    ctx.fillRect(drawX - 4, drawY - 3, 8, 3);
                     continue;
                 }
                 if (resource.type === 'berries') {
+                    if (this.drawCustomArtCentered(ctx, 'bush', drawX, drawY + 8, artOptions)) {
+                        continue;
+                    }
                     ctx.fillStyle = '#5b8b2f';
                     ctx.beginPath();
-                    ctx.arc(resource.x, resource.y, 9, 0, Math.PI * 2);
+                    ctx.arc(drawX, drawY, 9, 0, Math.PI * 2);
                     ctx.fill();
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
                     ctx.fillStyle = '#d53658';
-                    ctx.fillRect(resource.x - 5, resource.y - 2, 4, 4);
-                    ctx.fillRect(resource.x + 1, resource.y - 5, 4, 4);
-                    ctx.fillRect(resource.x, resource.y + 2, 4, 4);
+                    ctx.fillRect(drawX - 5, drawY - 2, 4, 4);
+                    ctx.fillRect(drawX + 1, drawY - 5, 4, 4);
+                    ctx.fillRect(drawX, drawY + 2, 4, 4);
+                    continue;
+                }
+                if (resource.type === 'fallenWood') {
+                    if (this.drawCustomArtCentered(ctx, 'fallenLog', drawX, drawY + 4, artOptions)) {
+                        continue;
+                    }
+                    ctx.fillStyle = '#8f5f33';
+                    ctx.fillRect(drawX - 9, drawY - 3, 18, 6);
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(drawX - 11, drawY - 5, 22, 10);
+                    }
                     continue;
                 }
                 if (resource.type === 'trees') {
+                    if (this.drawCustomArtCentered(ctx, 'tree', drawX, drawY + 12, {
+                        ...this.getTreeDrawSize(resource),
+                        ...artOptions
+                    })) {
+                        continue;
+                    }
                     ctx.fillStyle = '#5f3415';
-                    ctx.fillRect(resource.x - 2, resource.y + 3, 4, 11);
+                    ctx.fillRect(drawX - 2, drawY + 3, 4, 11);
                     ctx.fillStyle = '#356d28';
                     ctx.beginPath();
-                    ctx.arc(resource.x, resource.y, 11, 0, Math.PI * 2);
+                    ctx.arc(drawX, drawY, 11, 0, Math.PI * 2);
                     ctx.fill();
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
                     continue;
                 }
-                if (resource.type === 'stone') {
+                if (resource.type === 'looseStone') {
+                    if (this.drawCustomArtCentered(ctx, 'looseRock', drawX, drawY + 6, artOptions)) {
+                        continue;
+                    }
+                    ctx.fillStyle = '#aaa095';
+                    ctx.fillRect(drawX - 6, drawY - 4, 12, 8);
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(drawX - 8, drawY - 6, 16, 12);
+                    }
+                    continue;
+                }
+                if (resource.type === 'stone' || resource.type === 'looseStone') {
+                    if (this.drawCustomArtCentered(ctx, 'rockSmall', drawX, drawY + 8, {
+                        drawWidth: resource.type === 'looseStone' ? 24 : 32,
+                        drawHeight: resource.type === 'looseStone' ? 23 : 30,
+                        ...artOptions
+                    })) {
+                        continue;
+                    }
                     ctx.fillStyle = '#b5a99a';
                     ctx.beginPath();
-                    ctx.moveTo(resource.x - 10, resource.y + 6);
-                    ctx.lineTo(resource.x - 2, resource.y - 8);
-                    ctx.lineTo(resource.x + 10, resource.y - 3);
-                    ctx.lineTo(resource.x + 7, resource.y + 8);
+                    ctx.moveTo(drawX - 10, drawY + 6);
+                    ctx.lineTo(drawX - 2, drawY - 8);
+                    ctx.lineTo(drawX + 10, drawY - 3);
+                    ctx.lineTo(drawX + 7, drawY + 8);
                     ctx.closePath();
                     ctx.fill();
+                    if (useInfo.active) {
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
                 }
             }
 
+        }
+
+        drawTreeResource(ctx, resource) {
+            const useInfo = this.getResourceUseInfo(resource);
+            const shake = this.getResourceShakeOffset(resource, useInfo);
+            const drawX = resource.x + shake.x;
+            const drawY = resource.y + shake.y;
+            const artOptions = useInfo.active ? {
+                outlineColor: '#ffffff',
+                outlineAlpha: 0.95,
+                outlineSize: 2
+            } : {};
+            if (this.drawCustomArtCentered(ctx, 'tree', drawX, drawY + 12, {
+                ...this.getTreeDrawSize(resource),
+                ...artOptions
+            })) {
+                return;
+            }
+            ctx.fillStyle = '#5f3415';
+            ctx.fillRect(drawX - 2, drawY + 3, 4, 11);
+            ctx.fillStyle = '#356d28';
+            ctx.beginPath();
+            ctx.arc(drawX, drawY, 11, 0, Math.PI * 2);
+            ctx.fill();
+            if (useInfo.active) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        getVisibleTreeResources(bounds) {
+            return this.world.resources.filter((resource) => {
+                if (resource.depleted || resource.type !== 'trees') {
+                    return false;
+                }
+                const size = this.getTreeDrawSize(resource);
+                return !(resource.x + size.drawWidth * 0.5 < bounds.minX ||
+                    resource.x - size.drawWidth * 0.5 >= bounds.maxX ||
+                    resource.y + 36 < bounds.minY ||
+                    resource.y - size.drawHeight >= bounds.maxY);
+            });
+        }
+
+        getVisibleForestCanopies(bounds) {
+            if (!this.getCustomArt('forestTile')) {
+                return [];
+            }
+            const config = CUSTOM_ART_CONFIG.forestTile;
+            const colStride = 3;
+            const rowStride = 3;
+            const canopies = [];
+            for (const cell of this.world.cells) {
+                if (!cell || cell.biome !== 'forest') {
+                    continue;
+                }
+                if (cell.terrain?.cleared || cell.terrain?.burned) {
+                    continue;
+                }
+                if (((cell.col + cell.row * 2) % colStride) !== 0 || ((cell.row + cell.col) % rowStride) !== 0) {
+                    continue;
+                }
+                const x = cell.x + CELL_WIDTH * 1.45;
+                const y = cell.y + CELL_HEIGHT * 2.25;
+                if (x + config.drawWidth * 0.5 < bounds.minX ||
+                    x - config.drawWidth * 0.5 >= bounds.maxX ||
+                    y < bounds.minY ||
+                    y - config.drawHeight >= bounds.maxY) {
+                    continue;
+                }
+                canopies.push({ x, y });
+            }
+            return canopies;
+        }
+
+        drawForestCanopy(ctx, canopy) {
+            this.drawCustomArtCentered(ctx, 'forestTile', canopy.x, canopy.y);
+        }
+
+        drawDepthSortedCanopiesAndColonists(ctx) {
+            const bounds = this.getViewBounds();
+            const entries = [];
+            for (const canopy of this.getVisibleForestCanopies(bounds)) {
+                entries.push({
+                    type: 'forest',
+                    y: canopy.y,
+                    entity: canopy
+                });
+            }
+            for (const resource of this.getVisibleTreeResources(bounds)) {
+                entries.push({
+                    type: 'tree',
+                    y: resource.y + 12,
+                    entity: resource
+                });
+            }
+            for (const colonist of this.world.colonists) {
+                if (!this.isPointVisible(bounds, colonist.x, colonist.y, colonist.alive ? 20 : 14)) {
+                    continue;
+                }
+                entries.push({
+                    type: 'colonist',
+                    y: colonist.y + 11,
+                    entity: colonist
+                });
+            }
+            entries
+                .sort((left, right) => {
+                    const order = { forest: 0, tree: 1, colonist: 2 };
+                    return left.y - right.y || (order[left.type] ?? 9) - (order[right.type] ?? 9);
+                })
+                .forEach((entry) => {
+                    if (entry.type === 'forest') {
+                        this.drawForestCanopy(ctx, entry.entity);
+                    } else if (entry.type === 'tree') {
+                        this.drawTreeResource(ctx, entry.entity);
+                    } else {
+                        this.drawColonist(ctx, entry.entity);
+                    }
+                });
+        }
+
+        drawTallResourceOverlays(ctx) {
+            const bounds = this.getViewBounds();
+            for (const resource of this.world.resources) {
+                if (resource.depleted || resource.type !== 'trees') {
+                    continue;
+                }
+                const size = this.getTreeDrawSize(resource);
+                if (resource.x + size.drawWidth * 0.5 < bounds.minX ||
+                    resource.x - size.drawWidth * 0.5 >= bounds.maxX ||
+                    resource.y + 36 < bounds.minY ||
+                    resource.y - size.drawHeight >= bounds.maxY) {
+                    continue;
+                }
+                this.drawTreeResource(ctx, resource);
+            }
+        }
+
+        drawForestCanopiesInBounds(ctx, bounds) {
+            if (!this.getCustomArt('forestTile')) {
+                return;
+            }
+            const config = CUSTOM_ART_CONFIG.forestTile;
+            const colStride = 3;
+            const rowStride = 3;
+            for (const cell of this.world.cells) {
+                if (!cell || cell.biome !== 'forest') {
+                    continue;
+                }
+                if (cell.terrain?.cleared || cell.terrain?.burned) {
+                    continue;
+                }
+                if (((cell.col + cell.row * 2) % colStride) !== 0 || ((cell.row + cell.col) % rowStride) !== 0) {
+                    continue;
+                }
+                const x = cell.x + CELL_WIDTH * 1.45;
+                const y = cell.y + CELL_HEIGHT * 2.25;
+                if (x + config.drawWidth * 0.5 < bounds.minX ||
+                    x - config.drawWidth * 0.5 >= bounds.maxX ||
+                    y < bounds.minY ||
+                    y - config.drawHeight >= bounds.maxY) {
+                    continue;
+                }
+                this.drawCustomArtCentered(ctx, 'forestTile', x, y);
+            }
         }
 
         drawDynamicResources(ctx) {
@@ -1608,11 +2164,12 @@
             ctx.lineTo(camp.x - 2, camp.y - 33);
             ctx.stroke();
 
-            ctx.fillStyle = camp.fireFuel > 0 ? '#ffb448' : '#5f4a3a';
+            const fireLit = this.world.isCampFireLit ? this.world.isCampFireLit() : (camp.materials?.logs || 0) > 0;
+            ctx.fillStyle = fireLit ? '#ffb448' : '#5f4a3a';
             ctx.beginPath();
             ctx.arc(camp.x, camp.y + 10, 10, 0, Math.PI * 2);
             ctx.fill();
-            if (camp.fireFuel > 0) {
+            if (fireLit) {
                 ctx.fillStyle = '#ffe388';
                 ctx.beginPath();
                 ctx.arc(camp.x, camp.y + 8, 5, 0, Math.PI * 2);
@@ -2527,26 +3084,43 @@
             };
             const palette = eraTints[era] || eraTints.survival;
             if (building.type === 'campfire') {
+                const fireLit = this.world.isCampFireLit ? this.world.isCampFireLit() : (this.world.camp.materials?.logs || 0) >= 0.5;
                 ctx.fillStyle = '#6f4220';
                 ctx.beginPath();
                 ctx.arc(building.x, building.y + 2, 9, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.fillStyle = '#ffb448';
-                ctx.beginPath();
-                ctx.arc(building.x, building.y, 5, 0, Math.PI * 2);
-                ctx.fill();
+                if (fireLit) {
+                    ctx.fillStyle = '#ffb448';
+                    ctx.beginPath();
+                    ctx.arc(building.x, building.y, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#ffe388';
+                    ctx.beginPath();
+                    ctx.arc(building.x, building.y - 1, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = '#3f3028';
+                    ctx.beginPath();
+                    ctx.arc(building.x, building.y + 1, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             } else if (building.type === 'leanTo') {
-                ctx.fillStyle = '#8f6a43';
-                ctx.beginPath();
-                ctx.moveTo(building.x - 14, building.y + 10);
-                ctx.lineTo(building.x, building.y - 12);
-                ctx.lineTo(building.x + 14, building.y + 10);
-                ctx.closePath();
-                ctx.fill();
+                if (!this.drawCustomArtCentered(ctx, 'leanTo', building.x, building.y + 13)) {
+                    ctx.fillStyle = '#8f6a43';
+                    ctx.beginPath();
+                    ctx.moveTo(building.x - 14, building.y + 10);
+                    ctx.lineTo(building.x, building.y - 12);
+                    ctx.lineTo(building.x + 14, building.y + 10);
+                    ctx.closePath();
+                    ctx.fill();
+                }
             } else if (building.type === 'hut') {
                 if (!this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutBase, {
-                    drawWidth: CELL_WIDTH * 2,
-                    drawHeight: CELL_HEIGHT * 2
+                    drawWidth: CELL_WIDTH,
+                    drawHeight: CELL_HEIGHT,
+                    yOffset: 6,
+                    sourceY: STRUCTURE_SPRITE_CONFIG.frames.hutBase * STRUCTURE_SPRITE_CONFIG.frameHeight + 20,
+                    sourceHeight: STRUCTURE_SPRITE_CONFIG.frameHeight
                 })) {
                     ctx.fillStyle = palette.wood;
                     ctx.fillRect(building.x - 13, building.y - 10, 26, 20);
@@ -2837,12 +3411,21 @@
             if (building.type === 'farmPlot' || building.type === 'engineeredFarm') {
                 return this.getAlignedCropRect(building);
             }
+            if (building.type === 'leanTo' && this.getCustomArt('leanTo')) {
+                const config = CUSTOM_ART_CONFIG.leanTo;
+                return {
+                    x: building.x - config.drawWidth * 0.5,
+                    y: building.y + 13 - config.drawHeight * config.anchorY,
+                    width: config.drawWidth,
+                    height: config.drawHeight
+                };
+            }
             if (building.type === 'hut') {
                 return {
-                    x: building.x - CELL_WIDTH,
-                    y: building.y - CELL_HEIGHT,
-                    width: CELL_WIDTH * 2,
-                    height: CELL_HEIGHT * 2
+                    x: building.x - CELL_WIDTH * 0.5,
+                    y: building.y - CELL_HEIGHT * 0.5,
+                    width: CELL_WIDTH,
+                    height: CELL_HEIGHT
                 };
             }
             if (building.type === 'storage' && this.foodStorageSpriteReady) {
@@ -2966,11 +3549,11 @@
                 let drewRoofSprite = false;
                 if (building.type === 'hut') {
                     drewRoofSprite = this.drawStructureSprite(ctx, building, STRUCTURE_SPRITE_CONFIG.frames.hutRoof, {
-                        yOffset: -CELL_HEIGHT * 0.28,
-                        drawWidth: CELL_WIDTH * 2,
-                        drawHeight: CELL_HEIGHT * 2,
-                        sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY,
-                        sourceHeight: 128
+                        yOffset: -CELL_HEIGHT * 0.6,
+                        drawWidth: CELL_WIDTH,
+                        drawHeight: CELL_HEIGHT,
+                        sourceY: STRUCTURE_SPRITE_CONFIG.roofSourceY + 18,
+                        sourceHeight: 98
                     });
                     if (!drewRoofSprite) {
                         continue;
@@ -3006,57 +3589,61 @@
                     const rect = this.getBuildingSelectionRect(building);
                     ctx.strokeStyle = '#fff1a8';
                     ctx.lineWidth = 2;
-                    ctx.strokeRect(rect.x, rect.y - (building.type === 'hut' ? CELL_HEIGHT * 2 : 0), rect.width, rect.height + (building.type === 'hut' ? CELL_HEIGHT * 2 : 0));
+                    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
                 }
             }
         }
 
         drawColonists(ctx) {
             const bounds = this.getViewBounds();
+            for (const colonist of this.world.colonists) {
+                if (!this.isPointVisible(bounds, colonist.x, colonist.y, colonist.alive ? 20 : 14)) {
+                    continue;
+                }
+                this.drawColonist(ctx, colonist);
+            }
+        }
+
+        drawColonist(ctx, colonist) {
             const minimalDetail = this.performanceProfile.lowPower &&
                 this.world.colonists.length >= this.performanceProfile.minimalEntityDetailPopulation &&
                 this.zoom < 1.35;
             const simplifiedDetail = this.performanceProfile.lowPower &&
                 this.world.colonists.length >= this.performanceProfile.simplifiedEntityDetailPopulation &&
                 this.zoom < 1.7;
-            for (const colonist of this.world.colonists) {
-                if (!this.isPointVisible(bounds, colonist.x, colonist.y, colonist.alive ? 20 : 14)) {
-                    continue;
+            this.performanceStats.visibleColonists += 1;
+            if (!colonist.alive) {
+                this.drawDeadColonist(ctx, colonist);
+                return;
+            }
+            const important = this.world.selectedEntity === colonist || colonist.intent === 'war' || colonist.intent === 'protect';
+            const useFallbackOnly = simplifiedDetail && !important;
+            const drewSprite = !useFallbackOnly && this.drawColonistSprite(ctx, colonist);
+            if (!drewSprite) {
+                this.drawColonistFallback(ctx, colonist);
+            }
+            if (!minimalDetail || important) {
+                this.drawColonistGear(ctx, colonist);
+                this.drawColonistBattleState(ctx, colonist);
+                if (!simplifiedDetail || important) {
+                    this.drawIntentBubble(ctx, colonist);
                 }
-                this.performanceStats.visibleColonists += 1;
-                if (!colonist.alive) {
-                    this.drawDeadColonist(ctx, colonist);
-                    continue;
-                }
-                const important = this.world.selectedEntity === colonist || colonist.intent === 'war' || colonist.intent === 'protect';
-                const useFallbackOnly = simplifiedDetail && !important;
-                const drewSprite = !useFallbackOnly && this.drawColonistSprite(ctx, colonist);
-                if (!drewSprite) {
-                    this.drawColonistFallback(ctx, colonist);
-                }
-                if (!minimalDetail || important) {
-                    this.drawColonistGear(ctx, colonist);
-                    this.drawColonistBattleState(ctx, colonist);
-                    if (!simplifiedDetail || important) {
-                        this.drawIntentBubble(ctx, colonist);
-                    }
-                }
+            }
 
-                if (colonist.intent === 'war') {
-                    ctx.strokeStyle = 'rgba(226, 108, 92, 0.9)';
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.arc(colonist.x, colonist.y, 13, 0, Math.PI * 2);
-                    ctx.stroke();
-                }
+            if (colonist.intent === 'war') {
+                ctx.strokeStyle = 'rgba(226, 108, 92, 0.9)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(colonist.x, colonist.y, 13, 0, Math.PI * 2);
+                ctx.stroke();
+            }
 
-                if (this.world.selectedEntity === colonist) {
-                    ctx.strokeStyle = '#fff1a8';
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.arc(colonist.x, colonist.y, 11, 0, Math.PI * 2);
-                    ctx.stroke();
-                }
+            if (this.world.selectedEntity === colonist) {
+                ctx.strokeStyle = '#fff1a8';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(colonist.x, colonist.y, 11, 0, Math.PI * 2);
+                ctx.stroke();
             }
         }
 
@@ -3119,7 +3706,9 @@
                 'collectWater',
                 'deliverWater',
                 'collectWood',
-                'deliverWood'
+                'deliverWood',
+                'collectStone',
+                'deliverStone'
             ]);
             const isActivelyWorking = colonist.state === 'working' && colonist.actionProgress > 0;
             if (isActivelyWorking && gatherActions.has(currentStep?.action)) {
@@ -3433,7 +4022,7 @@
                 craft: '🔨',
                 process: '⚙️',
                 repair: '🔧',
-                plant: '🌱'
+                plant: '🌾'
             };
             return map[colonist.intent] || null;
         }
@@ -3834,7 +4423,7 @@
                 ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
             }
 
-            if (this.world.camp.fireFuel > 0) {
+            if (this.world.isCampFireLit ? this.world.isCampFireLit() : (this.world.camp.materials?.logs || 0) > 0) {
                 const glow = ctx.createRadialGradient(
                     this.world.camp.x,
                     this.world.camp.y + 10,

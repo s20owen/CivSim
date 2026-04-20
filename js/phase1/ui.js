@@ -29,6 +29,16 @@
         }
     }
 
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char]));
+    }
+
     function describePressure(world, temperature, weatherName, seasonName, averages) {
         const alerts = [];
         if (temperature < 2) alerts.push('cold exposure');
@@ -105,9 +115,22 @@
                 return;
             }
             if (this.renderCache[id] !== html) {
+                const previousScrollTop = node.scrollTop;
                 node.innerHTML = html;
                 this.renderCache[id] = html;
+                node.scrollTop = previousScrollTop;
             }
+        }
+
+        clearSelectionPopup() {
+            const panel = document.getElementById('stats-panel');
+            if (panel) {
+                panel.classList.add('is-hidden');
+            }
+        }
+
+        isColonistEntity(entity) {
+            return Boolean(entity) && (entity.entityType === 'colonist' || this.world.colonists.includes(entity));
         }
 
         isPanelOpen(id) {
@@ -168,9 +191,9 @@
                 'btn-bless-harvest': 'Bless Harvest',
                 'btn-lightning-strike': 'Lightning',
                 'btn-kill-creature': 'Instill Fear',
-                'btn-kill-unit': 'Kill Unit',
-                'btn-infect-creature': 'Spread Sickness',
-                'btn-heal-creature': 'Heal Selection',
+                'btn-kill-unit': 'Kill Colonist',
+                'btn-infect-creature': 'Sicken Colonist',
+                'btn-heal-creature': 'Heal All',
                 'btn-cure-disease': 'Disease Cure',
                 'btn-disease-outbreak': 'Disease Outbreak',
                 'btn-inspire-learning': 'Inspire Learning',
@@ -365,6 +388,76 @@
             if (reportClose) {
                 reportClose.addEventListener('click', () => this.hideBattleReport());
             }
+            const roster = document.getElementById('thought-feed');
+            if (roster) {
+                roster.addEventListener('click', (event) => {
+                    const card = event.target.closest('.colonist-card[data-colonist-id]');
+                    if (!card) {
+                        return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.selectRosterColonist(Number(card.dataset.colonistId));
+                });
+                roster.addEventListener('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                    }
+                    const card = event.target.closest('.colonist-card[data-colonist-id]');
+                    if (!card) {
+                        return;
+                    }
+                    event.preventDefault();
+                    this.selectRosterColonist(Number(card.dataset.colonistId));
+                });
+            }
+        }
+
+        selectRosterColonist(colonistId) {
+            const colonist = this.world.colonists.find((entry) => entry.id === colonistId);
+            if (!colonist) {
+                return;
+            }
+            this.world.selectedEntity = colonist;
+            if (this.renderer.centerOn) {
+                this.renderer.centerOn(colonist.x, colonist.y);
+            }
+            this.renderer.render();
+            this.handleSelectedEntityChanged({ scrollRoster: true });
+        }
+
+        handleSelectedEntityChanged(options = {}) {
+            if (this.isColonistEntity(this.world.selectedEntity)) {
+                this.clearSelectionPopup();
+                this.renderColonistRoster();
+                if (options.scrollRoster) {
+                    this.scrollSelectedColonistCardIntoView();
+                }
+                this.renderGodDrawer();
+                return;
+            }
+            this.renderSelection();
+            this.renderGodDrawer();
+        }
+
+        scrollSelectedColonistCardIntoView() {
+            const selected = this.world.selectedEntity;
+            if (!this.isColonistEntity(selected)) {
+                return;
+            }
+            const feed = document.getElementById('thought-feed');
+            const card = feed?.querySelector(`.colonist-card[data-colonist-id="${selected.id}"]`);
+            if (!feed || !card) {
+                return;
+            }
+            const padding = 8;
+            const feedRect = feed.getBoundingClientRect();
+            const cardRect = card.getBoundingClientRect();
+            if (cardRect.top < feedRect.top) {
+                feed.scrollTop = Math.max(0, feed.scrollTop - (feedRect.top - cardRect.top) - padding);
+            } else if (cardRect.bottom > feedRect.bottom) {
+                feed.scrollTop += cardRect.bottom - feedRect.bottom + padding;
+            }
         }
 
         bindCanvasSelection() {
@@ -414,8 +507,7 @@
                 const rect = this.renderer.canvas.getBoundingClientRect();
                 const worldPoint = this.renderer.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
                 this.world.selectAt(worldPoint.x, worldPoint.y);
-                this.renderSelection();
-                this.renderGodDrawer();
+                this.handleSelectedEntityChanged({ scrollRoster: true });
             });
 
             this.renderer.canvas.addEventListener('touchstart', (event) => {
@@ -465,8 +557,7 @@
                     const rect = this.renderer.canvas.getBoundingClientRect();
                     const worldPoint = this.renderer.screenToWorld(this.lastPointer.x - rect.left, this.lastPointer.y - rect.top);
                     this.world.selectAt(worldPoint.x, worldPoint.y);
-                    this.renderSelection();
-                    this.renderGodDrawer();
+                    this.handleSelectedEntityChanged({ scrollRoster: true });
                 }
                 if (event.touches.length < 2) {
                     this.touchDistance = 0;
@@ -583,7 +674,7 @@
             setText('storage-value', storageParts.join(' | '));
 
             if (this.isPanelOpen('thought-rail')) {
-                this.renderThoughts();
+                this.renderColonistRoster();
             }
             if (this.isPanelOpen('log-panel')) {
                 this.renderEvents();
@@ -685,12 +776,88 @@
             }
         }
 
-        renderThoughts() {
+        getColonistFamilyLabel(colonist) {
+            if (!colonist.familyId) {
+                return 'No family';
+            }
+            const family = (this.world.families || []).find((entry) => entry.id === colonist.familyId);
+            if (!family) {
+                return `Family ${colonist.familyId}`;
+            }
+            const partner = colonist.partnerId != null
+                ? this.world.colonists.find((entry) => entry.id === colonist.partnerId)
+                : null;
+            const childCount = family.childIds?.length || 0;
+            const partnerText = partner ? ` + ${partner.name}` : '';
+            return `Family ${family.id}${partnerText}${childCount ? `, ${childCount} child${childCount === 1 ? '' : 'ren'}` : ''}`;
+        }
+
+        getColonistTopSkills(colonist) {
+            return Object.entries(colonist.skills || {})
+                .sort((left, right) => right[1] - left[1])
+                .slice(0, 2)
+                .map(([skill, value]) => `${skill} ${value.toFixed(0)}`)
+                .join(' / ') || 'learning';
+        }
+
+        renderColonistRoster() {
             const feed = document.getElementById('thought-feed');
             if (!feed) {
                 return;
             }
-            this.setCachedHtml('thought-feed', this.world.thoughts.map((line) => `<li>${line}</li>`).join(''));
+            const living = this.world.colonists.filter((colonist) => colonist.alive);
+            if (!living.length) {
+                this.setCachedHtml('thought-feed', '<li class="colonist-card is-empty">No living colonists.</li>');
+                return;
+            }
+            const html = living
+                .slice()
+                .sort((left, right) => {
+                    const leftDanger = Math.min(left.stats.health, left.stats.hunger, left.stats.thirst, left.stats.warmth, left.stats.energy);
+                    const rightDanger = Math.min(right.stats.health, right.stats.hunger, right.stats.thirst, right.stats.warmth, right.stats.energy);
+                    return leftDanger - rightDanger || left.name.localeCompare(right.name);
+                })
+                .map((colonist) => {
+                    const role = this.world.getSoftRole ? this.world.getSoftRole(colonist) : (colonist.softRole || 'worker');
+                    const family = this.getColonistFamilyLabel(colonist);
+                    const job = colonist.intentLabel ? colonist.intentLabel() : (colonist.intent || 'idle');
+                    const status = colonist.threat ? 'threatened' : colonist.state || 'idle';
+                    const carried = colonist.carrying?.type
+                        ? `${colonist.carrying.type} ${colonist.carrying.amount.toFixed(1)}`
+                        : 'empty hands';
+                    const social = colonist.socialDisposition || {};
+                    const minNeed = Math.min(colonist.stats.health, colonist.stats.hunger, colonist.stats.thirst, colonist.stats.warmth, colonist.stats.energy);
+                    const dangerClass = minNeed < 24 ? ' is-critical' : minNeed < 42 ? ' is-strained' : '';
+                    const selectedClass = this.world.selectedEntity === colonist ? ' is-selected' : '';
+                    return `
+                        <li class="colonist-card${dangerClass}${selectedClass}" data-colonist-id="${colonist.id}" role="button" tabindex="0">
+                            <div class="colonist-portrait" aria-hidden="true">
+                                <span class="portrait-head"></span>
+                                <span class="portrait-body"></span>
+                            </div>
+                            <div class="colonist-card-main">
+                                <div class="colonist-card-top">
+                                    <strong>${escapeHtml(colonist.name)}</strong>
+                                    <span>${escapeHtml(role)}</span>
+                                </div>
+                                <div class="colonist-card-job">${escapeHtml(job)} • ${escapeHtml(status)}</div>
+                                <div class="colonist-stat-grid">
+                                    <span>H ${colonist.stats.health.toFixed(0)}</span>
+                                    <span>Food ${colonist.stats.hunger.toFixed(0)}</span>
+                                    <span>Water ${colonist.stats.thirst.toFixed(0)}</span>
+                                    <span>Warm ${colonist.stats.warmth.toFixed(0)}</span>
+                                    <span>Energy ${colonist.stats.energy.toFixed(0)}</span>
+                                    <span>Morale ${colonist.stats.morale.toFixed(0)}</span>
+                                </div>
+                                <div class="colonist-card-meta">${escapeHtml(family)}</div>
+                                <div class="colonist-card-meta">Age ${colonist.ageYears.toFixed(1)} ${escapeHtml(colonist.lifeStage)} • ${escapeHtml(this.getColonistTopSkills(colonist))}</div>
+                                <div class="colonist-card-meta">Carrying ${escapeHtml(carried)} • help ${(social.helpfulness || 0).toFixed(2)} / self ${(social.selfishness || 0).toFixed(2)}</div>
+                            </div>
+                        </li>
+                    `;
+                })
+                .join('');
+            this.setCachedHtml('thought-feed', html);
         }
 
         renderEvents() {
@@ -778,10 +945,15 @@
             if (godDrawerOpen) {
                 return;
             }
+            if (this.isColonistEntity(selected)) {
+                this.clearSelectionPopup();
+                this.renderColonistRoster();
+                return;
+            }
 
             if (selected === this.world.camp) {
                 setText('selection-title', 'Camp');
-                setSelectionStat('stat-label-a', 'stat-energy', 'Fire Fuel', `${this.world.camp.fireFuel.toFixed(0)}`);
+                setSelectionStat('stat-label-a', 'stat-energy', 'Fire Logs', `${this.world.camp.materials.logs.toFixed(0)}`);
                 setSelectionStat('stat-label-b', 'stat-hunger', 'Food', `${this.world.camp.food.toFixed(0)}`);
                 setSelectionStat('stat-label-c', 'stat-fun', 'Water', `${this.world.camp.water.toFixed(0)}`);
                 setSelectionStat('stat-label-d', 'stat-age', 'Shelter', `${this.world.camp.shelter.toFixed(0)}`);
@@ -790,23 +962,48 @@
             }
 
             if (selected.entityType === 'project') {
+                const requirements = this.world.getProjectRequirements ? this.world.getProjectRequirements(selected) : (selected.requirements || {});
+                const materialSummary = Object.entries(requirements)
+                    .map(([key, amount]) => {
+                        const delivered = selected.delivered?.[key] || 0;
+                        const remaining = Math.max(0, amount - delivered);
+                        return `${key} ${delivered}/${amount}${remaining > 0 ? ` (${remaining} left)` : ''}`;
+                    })
+                    .join(', ') || 'No materials needed';
+                const upgradeLabel = selected.targetBuildingType
+                    ? `Upgrade: ${selected.targetBuildingType} -> ${selected.type}`
+                    : 'New construction';
                 setText('selection-title', `Project: ${selected.type}`);
                 setSelectionStat('stat-label-a', 'stat-energy', 'Progress', `${selected.buildProgress.toFixed(1)} / ${selected.buildTime.toFixed(1)}`);
-                setSelectionStat('stat-label-b', 'stat-hunger', 'Materials', Object.entries(selected.delivered).map(([key, value]) => `${key} ${value}`).join(', ') || 'No materials needed');
+                setSelectionStat('stat-label-b', 'stat-hunger', 'Materials', materialSummary);
                 setSelectionStat('stat-label-c', 'stat-fun', 'Position', `${selected.x.toFixed(0)}, ${selected.y.toFixed(0)}`);
-                setSelectionStat('stat-label-d', 'stat-age', 'State', 'Under construction');
-                setSelectionStat('stat-label-e', 'stat-trait', 'Notes', 'Colonists haul materials here and build over time');
+                setSelectionStat('stat-label-d', 'stat-age', 'State', upgradeLabel);
+                setSelectionStat('stat-label-e', 'stat-trait', 'Notes', selected.targetBuildingType ? 'Colonists are rebuilding an existing structure in place' : 'Colonists haul materials here and build over time');
                 return;
             }
 
             if (selected.entityType === 'building') {
                 setText('selection-title', selected.type[0].toUpperCase() + selected.type.slice(1));
                 const integrity = Math.round((selected.integrity / Math.max(1, selected.maxIntegrity || 1)) * 100);
+                const occupants = selected.occupantIds?.length || 0;
+                const capacity = selected.capacity || (this.world.getHomeSlotCapacity ? this.world.getHomeSlotCapacity(selected) : 0);
+                const upgradePreview = this.world.getUpgradePreview ? this.world.getUpgradePreview(selected) : null;
+                const functionLabel = selected.type === 'farmPlot'
+                    ? 'Food production zone'
+                    : capacity > 0
+                        ? `Home ${occupants}/${capacity}`
+                        : (selected.storageBonus || 0) > 0 || ['storage', 'storagePit', 'granary', 'warehouse'].includes(selected.type)
+                            ? `Storage +${Math.round((selected.storageBonus || 0) || 0)}`
+                            : 'Settlement structure';
                 setSelectionStat('stat-label-a', 'stat-energy', 'Integrity', `${integrity}%`);
                 setSelectionStat('stat-label-b', 'stat-hunger', 'Position', `${selected.x.toFixed(0)}, ${selected.y.toFixed(0)}`);
-                setSelectionStat('stat-label-c', 'stat-fun', 'Function', selected.type === 'farmPlot' ? 'Food production zone' : 'Settlement structure');
+                setSelectionStat('stat-label-c', 'stat-fun', 'Function', functionLabel);
                 setSelectionStat('stat-label-d', 'stat-age', 'Built', `Day ${selected.completedDay || '-'} / Year ${selected.completedYear || '-'}`);
-                setSelectionStat('stat-label-e', 'stat-trait', 'Notes', 'Part of the colony home base');
+                setSelectionStat('stat-label-e', 'stat-trait', 'Notes', upgradePreview
+                    ? (upgradePreview.ready
+                        ? `Can upgrade to ${upgradePreview.nextType}`
+                        : `Next: ${upgradePreview.nextType} • ${upgradePreview.reasons.slice(0, 2).join(' / ') || 'not ready'}`)
+                    : 'Part of the colony home base');
                 return;
             }
 
@@ -845,7 +1042,9 @@
             setSelectionStat('stat-label-b', 'stat-hunger', 'Hunger', `${selected.stats.hunger.toFixed(0)}`);
             setSelectionStat('stat-label-c', 'stat-fun', 'Thirst', `${selected.stats.thirst.toFixed(0)}`);
             setSelectionStat('stat-label-d', 'stat-age', 'Age', `${selected.ageYears.toFixed(1)}y / ${selected.lifeStage}`);
-            setSelectionStat('stat-label-e', 'stat-trait', 'Status', `family ${selected.familyId ?? '-'} / ${selected.intent} / ${selected.stats.health.toFixed(0)} health`);
+            const role = this.world.getSoftRole ? this.world.getSoftRole(selected) : (selected.softRole || 'worker');
+            const social = selected.socialDisposition || {};
+            setSelectionStat('stat-label-e', 'stat-trait', 'Status', `${role} / help ${(social.helpfulness || 0).toFixed(2)} / self ${(social.selfishness || 0).toFixed(2)}`);
         }
 
         setGodTab(tab) {
@@ -871,20 +1070,46 @@
                 selectionLines.push(`Food: ${this.world.camp.food.toFixed(1)}`);
                 selectionLines.push(`Water: ${this.world.camp.water.toFixed(1)}`);
                 selectionLines.push(`Shelter: ${this.world.camp.shelter.toFixed(1)}`);
-                selectionLines.push(`Fire fuel: ${this.world.camp.fireFuel.toFixed(1)}`);
+                selectionLines.push(`Fire logs: ${this.world.camp.materials.logs.toFixed(1)}`);
             } else if (selected.entityType === 'building') {
                 selectionLines.push(`Building: ${selected.type}`);
                 selectionLines.push(`Integrity: ${Math.round((selected.integrity / Math.max(1, selected.maxIntegrity || 1)) * 100)}%`);
                 selectionLines.push(`Built: day ${selected.completedDay}, year ${selected.completedYear}`);
                 selectionLines.push(`Pos: ${Math.round(selected.x)}, ${Math.round(selected.y)}`);
+                const capacity = selected.capacity || (this.world.getHomeSlotCapacity ? this.world.getHomeSlotCapacity(selected) : 0);
+                if (capacity > 0) {
+                    selectionLines.push(`Occupancy: ${(selected.occupantIds?.length || 0)}/${capacity}`);
+                }
+                if (['storage', 'storagePit', 'granary', 'warehouse'].includes(selected.type)) {
+                    selectionLines.push(`Storage tier: ${this.world.getStorageTierValue ? this.world.getStorageTierValue() : '-'}`);
+                }
+                const preview = this.world.getUpgradePreview ? this.world.getUpgradePreview(selected) : null;
+                if (preview) {
+                    selectionLines.push(`Next upgrade: ${preview.nextType}`);
+                    selectionLines.push(preview.ready
+                        ? 'Upgrade ready'
+                        : `Blocked: ${(preview.reasons || []).slice(0, 3).join(' / ') || 'not ready'}`);
+                }
             } else if (selected.entityType === 'project') {
                 selectionLines.push(`Project: ${selected.type}`);
+                if (selected.targetBuildingType) {
+                    selectionLines.push(`Upgrade: ${selected.targetBuildingType} -> ${selected.type}`);
+                }
                 selectionLines.push(`Progress: ${selected.buildProgress.toFixed(1)} / ${selected.buildTime.toFixed(1)}`);
                 selectionLines.push(`Pos: ${Math.round(selected.x)}, ${Math.round(selected.y)}`);
-            } else if (selected.entityType === 'colonist') {
+            } else if (this.isColonistEntity(selected)) {
+                const role = this.world.getSoftRole ? this.world.getSoftRole(selected) : (selected.softRole || 'worker');
+                const roleLeanings = this.world.getRoleScores
+                    ? Object.entries(this.world.getRoleScores(selected))
+                        .sort((left, right) => right[1] - left[1])
+                        .slice(0, 2)
+                        .map(([label]) => label)
+                        .join(', ')
+                    : role;
                 selectionLines.push(`${selected.name}`);
                 selectionLines.push(`Intent: ${selected.intent}`);
-                selectionLines.push(`Role: ${selected.softRole}`);
+                selectionLines.push(`Role: ${role}`);
+                selectionLines.push(`Leans: ${roleLeanings}`);
                 selectionLines.push(`Age: ${selected.ageYears.toFixed(1)} (${selected.lifeStage})`);
                 selectionLines.push(`Health: ${selected.stats.health.toFixed(0)}  Morale: ${selected.stats.morale.toFixed(0)}`);
                 selectionLines.push(`Family: ${selected.familyId ?? '-'}`);
@@ -930,7 +1155,7 @@
             setNodeText('god-inspect-culture', cultureLines.filter(Boolean).join('\n'));
 
             const memoryLines = [];
-            if (selected?.entityType === 'colonist') {
+            if (this.isColonistEntity(selected)) {
                 memoryLines.push(`Known water: ${(selected.memory.resources?.water || []).length}`);
                 memoryLines.push(`Known food: ${(selected.memory.resources?.berries || []).length + (selected.memory.resources?.wildAnimal || []).length}`);
                 memoryLines.push(`Danger zones: ${(selected.memory.dangerZones || []).length}`);
@@ -944,7 +1169,7 @@
             setNodeText('god-inspect-memory', memoryLines.join('\n'));
 
             const thoughtLines = [];
-            if (selected?.entityType === 'colonist') {
+            if (this.isColonistEntity(selected)) {
                 thoughtLines.push(`Current intent: ${selected.intent || 'none'}`);
                 thoughtLines.push(`Current need: ${selected.lastNeed || 'none'}`);
                 const planStep = selected.plan[selected.planStep];
@@ -967,7 +1192,7 @@
                 `Predators: ${(this.world.predators || []).length}`,
                 `Conflict pressure: ${this.world.getRegionalConflictPressure().toFixed(2)}`
             ];
-            if (selected?.entityType === 'colonist') {
+            if (this.isColonistEntity(selected)) {
                 battleLines.push(`Would join battle: ${this.world.shouldColonistJoinBattle(selected) ? 'yes' : 'no'}`);
                 battleLines.push(`Combat: ${selected.skills.combat.toFixed(1)}`);
                 battleLines.push(`Health: ${selected.stats.health.toFixed(0)} Energy: ${selected.stats.energy.toFixed(0)}`);
