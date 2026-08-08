@@ -122,19 +122,7 @@
         rockSmall: { src: 'rock_small.png', drawWidth: 32, drawHeight: 30, anchorY: 0.72 },
         looseRock: { src: 'loose-rock.png', drawWidth: 35, drawHeight: 27, anchorY: 0.72 },
         fallenLog: { src: 'fallen-log.png', drawWidth: 23, drawHeight: 19, anchorY: 0.62 },
-        forestTile: { src: 'forest.png', drawWidth: 257, drawHeight: 261, anchorY: 0.86 },
-        waterSheet: {
-            src: 'water-sheet.png',
-            frameCount: 4,
-            frameRects: [
-                { x: 0, y: 0, width: 71, height: 52 },
-                { x: 71, y: 0, width: 56, height: 42 },
-                { x: 127, y: 0, width: 41, height: 31 },
-                { x: 168, y: 0, width: 26, height: 20 }
-            ],
-            drawWidth: 44,
-            drawHeight: 48
-        }
+        forestTile: { src: 'forest.png', drawWidth: 257, drawHeight: 261, anchorY: 0.86 }
     };
     const ASSET_IMAGE_CACHE = new Map();
 
@@ -200,6 +188,7 @@
                 visibleAnimals: 0,
                 visiblePredators: 0,
                 totalStaticResources: 0,
+                weatherPrimitives: 0,
                 memory: null
             };
             this.lastPerfSampleAt = performance.now();
@@ -211,7 +200,7 @@
             const coarsePointer = typeof window.matchMedia === 'function'
                 ? window.matchMedia('(pointer: coarse)').matches
                 : false;
-            const narrowViewport = Math.min(window.innerWidth || 1280, window.innerHeight || 720) <= 820;
+            const narrowViewport = (window.innerWidth || 1280) <= 820;
             const mobile = coarsePointer || narrowViewport;
             return {
                 mobile,
@@ -220,6 +209,9 @@
                 staticLayerScale: mobile ? 0.75 : 1,
                 weatherDensity: mobile ? 0.62 : 1,
                 nearGroundDensity: mobile ? 0.58 : 1,
+                rainForegroundDensity: mobile ? 0.38 : 1,
+                rainRippleDensity: mobile ? 0.42 : 1,
+                weatherPrimitiveCap: mobile ? 130 : 300,
                 fogLayers: mobile ? 1 : 2,
                 nearGroundInterval: mobile ? 0.12 : 0,
                 battleOverlayInterval: mobile ? 0.1 : 0,
@@ -420,6 +412,24 @@
             return Math.round(value / size) * size;
         }
 
+        wrapToView(value, start, span) {
+            if (span <= 0) {
+                return start;
+            }
+            return start + ((((value - start) % span) + span) % span);
+        }
+
+        getAdaptiveWeatherDensity() {
+            const frameMs = this.performanceStats.frameMs || 16.7;
+            const renderMs = this.performanceStats.renderMs || 0;
+            const adaptive = frameMs > 30 || renderMs > 14
+                ? 0.55
+                : frameMs > 22 || renderMs > 9
+                    ? 0.76
+                    : 1;
+            return this.performanceProfile.weatherDensity * adaptive;
+        }
+
         withPixelatedImages(ctx, fn) {
             const prev = ctx.imageSmoothingEnabled;
             ctx.imageSmoothingEnabled = false;
@@ -564,90 +574,6 @@
                 drawWidth: Math.round(config.drawWidth + (maxWidth - config.drawWidth) * t),
                 drawHeight: Math.round(config.drawHeight + (maxHeight - config.drawHeight) * t)
             };
-        }
-
-        getWaterFrameForRatio(ratio = 1) {
-            const normalized = clamp(Number.isFinite(ratio) ? ratio : 1, 0, 1);
-            if (normalized > 0.75) return 0;
-            if (normalized > 0.5) return 1;
-            if (normalized > 0.25) return 2;
-            return 3;
-        }
-
-        drawWaterFrame(ctx, x, y, ratio = 1, options = {}) {
-            const image = this.getCustomArt('waterSheet');
-            if (!image) {
-                return false;
-            }
-            const config = CUSTOM_ART_CONFIG.waterSheet;
-            const frame = this.getWaterFrameForRatio(ratio);
-            const rect = config.frameRects?.[frame] || {
-                x: Math.round((image.width * frame) / config.frameCount),
-                y: 0,
-                width: Math.max(1, Math.round(image.width / config.frameCount)),
-                height: image.height
-            };
-            const sourceLeft = rect.x;
-            const sourceTop = rect.y || 0;
-            const sourceWidth = Math.max(1, rect.width);
-            const sourceHeight = Math.max(1, rect.height || image.height);
-            const scale = options.scale || 1;
-            const drawWidth = options.drawWidth || Math.round(sourceWidth * scale);
-            const drawHeight = options.drawHeight || Math.round(sourceHeight * scale);
-            const drawX = options.anchor === 'topLeft'
-                ? x
-                : Math.round(x - drawWidth * 0.5);
-            const drawY = options.anchor === 'topLeft'
-                ? y
-                    : frame === 0
-                        ? Math.round(y - drawHeight * 0.5)
-                        : Math.round(y - drawHeight * 0.82);
-            this.withPixelatedImages(ctx, () => {
-                if (options.outlineColor) {
-                    const previousFilter = ctx.filter;
-                    ctx.save();
-                    ctx.filter = 'brightness(0) invert(1)';
-                    ctx.globalAlpha = options.outlineAlpha ?? 0.92;
-                    const outlineSize = options.outlineSize ?? 2;
-                    const offsets = [
-                        [-outlineSize, 0],
-                        [outlineSize, 0],
-                        [0, -outlineSize],
-                        [0, outlineSize],
-                        [-outlineSize, -outlineSize],
-                        [outlineSize, -outlineSize],
-                        [-outlineSize, outlineSize],
-                        [outlineSize, outlineSize]
-                    ];
-                    for (const [offsetX, offsetY] of offsets) {
-                        ctx.drawImage(
-                            image,
-                            sourceLeft,
-                            sourceTop,
-                            sourceWidth,
-                            sourceHeight,
-                            drawX + offsetX,
-                            drawY + offsetY,
-                            drawWidth,
-                            drawHeight
-                        );
-                    }
-                    ctx.restore();
-                    ctx.filter = previousFilter;
-                }
-                ctx.drawImage(
-                    image,
-                    sourceLeft,
-                    sourceTop,
-                    sourceWidth,
-                    sourceHeight,
-                    drawX,
-                    drawY,
-                    drawWidth,
-                    drawHeight
-                );
-            });
-            return true;
         }
 
         getWeatherPatternCanvas(kind, variant = 0) {
@@ -941,6 +867,7 @@
             this.performanceStats.visibleAnimals = 0;
             this.performanceStats.visiblePredators = 0;
             this.performanceStats.totalStaticResources = this.world.resources.filter((resource) => !resource.depleted).length;
+            this.performanceStats.weatherPrimitives = 0;
             ctx.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
             ctx.fillStyle = BIOME_COLORS.valley || '#5f553f';
             ctx.fillRect(0, 0, this.viewportWidth, this.viewportHeight);
@@ -1032,6 +959,7 @@
                     predators: this.performanceStats.visiblePredators,
                     staticResources: this.performanceStats.totalStaticResources
                 },
+                weatherPrimitives: this.performanceStats.weatherPrimitives,
                 caches: this.getAssetMemoryEstimate(),
                 pools,
                 updateBreakdown: this.world.performanceTelemetry?.updateBreakdown || {},
@@ -1134,7 +1062,7 @@
         }
 
         buildStaticPropSignature() {
-            const parts = [];
+            const parts = [`season:${this.world.getSeason().name}`];
             for (const relic of this.world.godMode?.relics || []) {
                 parts.push(`relic:${Math.round(relic.x)}:${Math.round(relic.y)}`);
             }
@@ -1142,7 +1070,7 @@
                 if (resource.depleted) {
                     continue;
                 }
-                parts.push(`${resource.type}:${Math.round(resource.x)}:${Math.round(resource.y)}:${Math.round(resource.amount || 0)}`);
+                parts.push(`${resource.type}:${Math.round(resource.x)}:${Math.round(resource.y)}:${Math.round(resource.amount || 0)}:${resource.frozen ? 1 : 0}`);
             }
             return parts.join('|');
         }
@@ -1539,9 +1467,10 @@
             for (const cell of this.world.cells) {
                 const terrain = cell.terrain || {};
                 const wear = terrain.pathWear || 0;
+                const passes = terrain.trafficPasses || 0;
                 const builtFootprint = !!terrain.builtFootprint;
                 const buildSiteFootprint = builtFootprint || !!terrain.preparedBuildSite;
-                if (!buildSiteFootprint && wear < 0.18 && (terrain.roadLevel || 0) < 0.24) {
+                if (!buildSiteFootprint && passes < 0.2 && wear < 0.01 && (terrain.roadLevel || 0) < 0.24) {
                     continue;
                 }
                 if (cell.x + CELL_WIDTH < bounds.minX || cell.x >= bounds.maxX || cell.y + CELL_HEIGHT < bounds.minY || cell.y >= bounds.maxY) {
@@ -1550,7 +1479,25 @@
                 const roadLevel = terrain.roadLevel || 0;
                 const dirtAlpha = buildSiteFootprint
                     ? (builtFootprint ? 0.92 : 0.78)
-                    : clamp((wear - 0.68) / 0.28 + roadLevel * 0.2, 0, 0.82);
+                    : clamp((wear - 0.84) / 0.16 + roadLevel * 0.12, 0, 0.9);
+
+                if (!buildSiteFootprint && wear >= 0.06 && dirtAlpha < 0.88) {
+                    const disturbedAlpha = clamp((wear - 0.06) / 0.7, 0, 0.3) * (1 - dirtAlpha * 0.55);
+                    ctx.save();
+                    ctx.fillStyle = `rgba(112, 91, 53, ${disturbedAlpha.toFixed(3)})`;
+                    ctx.fillRect(cell.x, cell.y, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+                    for (let patchIndex = 0; patchIndex < 4; patchIndex += 1) {
+                        const seed = cell.col * 37 + cell.row * 61 + patchIndex * 23;
+                        const patchX = cell.x + 7 + (seed % Math.max(8, CELL_WIDTH - 14));
+                        const patchY = cell.y + 7 + ((seed * 7) % Math.max(8, CELL_HEIGHT - 14));
+                        ctx.fillStyle = `rgba(91, 70, 42, ${(disturbedAlpha * 0.72).toFixed(3)})`;
+                        ctx.beginPath();
+                        ctx.ellipse(patchX, patchY, 3 + wear * 6, 1.5 + wear * 3, (seed % 12) * 0.22, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                }
+
                 if (dirtAlpha > 0.08) {
                     ctx.save();
                     ctx.globalAlpha = dirtAlpha;
@@ -1563,7 +1510,29 @@
                     ctx.restore();
                 }
 
-                const scuffAlpha = buildSiteFootprint ? 0 : clamp((wear - 0.18) / 0.48, 0, 0.34);
+                if (!buildSiteFootprint && passes >= 0.2 && dirtAlpha < 0.82) {
+                    const footprintAlpha = clamp(0.12 + Math.log2(1 + passes) * 0.035, 0.12, 0.34) * (1 - dirtAlpha * 0.7);
+                    const heading = Number.isFinite(terrain.trafficAngle) ? terrain.trafficAngle : 0;
+                    const pairCount = Math.min(5, 1 + Math.floor(Math.log2(1 + passes) / 2));
+                    ctx.save();
+                    ctx.fillStyle = `rgba(74, 60, 37, ${footprintAlpha.toFixed(3)})`;
+                    for (let pair = 0; pair < pairCount; pair += 1) {
+                        const seed = cell.col * 41 + cell.row * 67 + pair * 29;
+                        const px = cell.x + 9 + (seed % Math.max(8, CELL_WIDTH - 18));
+                        const py = cell.y + 9 + ((seed * 11) % Math.max(8, CELL_HEIGHT - 18));
+                        ctx.save();
+                        ctx.translate(px, py);
+                        ctx.rotate(heading);
+                        ctx.beginPath();
+                        ctx.ellipse(-2.5, -2.2, 2.5, 1.25, 0.25, 0, Math.PI * 2);
+                        ctx.ellipse(2.5, 2.2, 2.5, 1.25, -0.25, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.restore();
+                    }
+                    ctx.restore();
+                }
+
+                const scuffAlpha = buildSiteFootprint ? 0 : clamp((wear - 0.32) / 0.5, 0, 0.28);
                 if (scuffAlpha <= 0) {
                     continue;
                 }
@@ -1622,11 +1591,11 @@
             } else if (season === 'Autumn' && cell.biome === 'forest') {
                 fill = '#8c6a2f';
             }
-            const terrainArt = cell.biome === 'water' || cell.biome === 'grassland' || cell.biome === 'fertile' || cell.biome === 'forest'
+            const terrainArt = cell.biome === 'grassland' || cell.biome === 'fertile' || cell.biome === 'forest' || cell.biome === 'rocky'
                 ? 'grassTile'
-                : cell.biome === 'rocky' || cell.biome === 'valley'
-                        ? 'dirtTile'
-                        : null;
+                : cell.biome === 'valley'
+                    ? 'dirtTile'
+                    : null;
             const drewTerrainArt = terrainArt
                 ? this.drawCustomTerrainTile(ctx, terrainArt, localX, localY)
                 : false;
@@ -1634,8 +1603,68 @@
                 ctx.fillStyle = fill;
                 ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
             }
+            if (cell.biome === 'water') {
+                const isWater = (col, row) => {
+                    if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) {
+                        return false;
+                    }
+                    return this.world.cells[row * GRID_COLS + col]?.biome === 'water';
+                };
+                const joinsLeft = isWater(cell.col - 1, cell.row);
+                const joinsRight = isWater(cell.col + 1, cell.row);
+                const joinsTop = isWater(cell.col, cell.row - 1);
+                const joinsBottom = isWater(cell.col, cell.row + 1);
+                ctx.fillStyle = season === 'Winter' ? '#8fb9c8' : '#397da2';
+                ctx.beginPath();
+                ctx.roundRect(localX + 2, localY + 2, CELL_WIDTH - 3, CELL_HEIGHT - 3, 10);
+                ctx.fill();
+                if (joinsLeft) ctx.fillRect(localX, localY + 2, CELL_WIDTH * 0.55, CELL_HEIGHT - 3);
+                if (joinsRight) ctx.fillRect(localX + CELL_WIDTH * 0.45, localY + 2, CELL_WIDTH * 0.56, CELL_HEIGHT - 3);
+                if (joinsTop) ctx.fillRect(localX + 2, localY, CELL_WIDTH - 3, CELL_HEIGHT * 0.55);
+                if (joinsBottom) ctx.fillRect(localX + 2, localY + CELL_HEIGHT * 0.45, CELL_WIDTH - 3, CELL_HEIGHT * 0.56);
+                ctx.fillStyle = season === 'Winter'
+                    ? 'rgba(225, 242, 246, 0.22)'
+                    : 'rgba(138, 207, 225, 0.18)';
+                const waveOffset = ((cell.col * 7 + cell.row * 11) % 13);
+                ctx.fillRect(localX + 5 + waveOffset, localY + 11, 18, 2);
+                ctx.fillRect(localX + 23 - waveOffset * 0.35, localY + 29, 15, 2);
+                ctx.strokeStyle = season === 'Winter'
+                    ? 'rgba(77, 121, 145, 0.34)'
+                    : 'rgba(28, 91, 126, 0.28)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                if (!joinsTop) {
+                    ctx.moveTo(localX + 9, localY + 2.5);
+                    ctx.lineTo(localX + CELL_WIDTH - 9, localY + 2.5);
+                }
+                if (!joinsBottom) {
+                    ctx.moveTo(localX + 9, localY + CELL_HEIGHT - 1.5);
+                    ctx.lineTo(localX + CELL_WIDTH - 9, localY + CELL_HEIGHT - 1.5);
+                }
+                if (!joinsLeft) {
+                    ctx.moveTo(localX + 2.5, localY + 9);
+                    ctx.lineTo(localX + 2.5, localY + CELL_HEIGHT - 9);
+                }
+                if (!joinsRight) {
+                    ctx.moveTo(localX + CELL_WIDTH - 1.5, localY + 9);
+                    ctx.lineTo(localX + CELL_WIDTH - 1.5, localY + CELL_HEIGHT - 9);
+                }
+                ctx.stroke();
+                if (season === 'Winter' && (cell.col + cell.row) % 3 === 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(localX + 12, localY + 7);
+                    ctx.lineTo(localX + 23, localY + 19);
+                    ctx.lineTo(localX + 18, localY + 31);
+                    ctx.stroke();
+                }
+                return;
+            }
             if (drewTerrainArt && (season === 'Winter' || (season === 'Autumn' && cell.biome === 'forest'))) {
                 ctx.fillStyle = season === 'Winter' ? 'rgba(198, 211, 208, 0.34)' : 'rgba(156, 102, 42, 0.2)';
+                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+            }
+            if (drewTerrainArt && cell.biome === 'rocky') {
+                ctx.fillStyle = 'rgba(104, 104, 91, 0.17)';
                 ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
             }
 
@@ -1645,9 +1674,19 @@
                     ctx.fillRect(localX + 8 + i * 10, localY + ((i * 11) % 24), 6, 6);
                 }
             } else if (cell.biome === 'fertile') {
-                ctx.fillStyle = 'rgba(188, 201, 94, 0.22)';
-                ctx.fillRect(localX + 10, localY + 8, 22, 10);
-                ctx.fillRect(localX + 30, localY + 26, 16, 8);
+                ctx.fillStyle = season === 'Winter'
+                    ? 'rgba(211, 220, 174, 0.1)'
+                    : 'rgba(177, 205, 76, 0.3)';
+                ctx.fillRect(localX, localY, CELL_WIDTH + 1, CELL_HEIGHT + 1);
+                ctx.fillStyle = season === 'Winter'
+                    ? 'rgba(239, 239, 207, 0.22)'
+                    : 'rgba(229, 219, 105, 0.5)';
+                for (let i = 0; i < 4; i += 1) {
+                    const sproutX = localX + 8 + i * 10;
+                    const sproutY = localY + 10 + ((cell.col + cell.row + i * 3) % 22);
+                    ctx.fillRect(sproutX, sproutY, 3, 3);
+                    ctx.fillRect(sproutX + 2, sproutY - 3, 2, 4);
+                }
             } else if (cell.biome === 'rocky') {
                 ctx.fillStyle = 'rgba(238, 220, 194, 0.14)';
                 ctx.fillRect(localX + 8, localY + 8, 12, 7);
@@ -1764,25 +1803,16 @@
                     outlineSize: 2
                 } : {};
                 if (resource.type === 'water') {
-                    const waterRatio = resource.maxAmount > 0 ? resource.amount / resource.maxAmount : 1;
-                    if (this.drawWaterFrame(ctx, drawX, drawY, waterRatio, artOptions)) {
-                        continue;
-                    }
-                    ctx.fillStyle = '#83cceb';
-                    ctx.beginPath();
-                    ctx.arc(drawX, drawY, 10, 0, Math.PI * 2);
-                    ctx.fill();
-                    if (useInfo.active) {
-                        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-                        ctx.lineWidth = 2;
-                        ctx.stroke();
-                    }
-                    ctx.fillStyle = 'rgba(255,255,255,0.28)';
-                    ctx.fillRect(drawX - 4, drawY - 3, 8, 3);
                     continue;
                 }
                 if (resource.type === 'berries') {
                     if (this.drawCustomArtCentered(ctx, 'bush', drawX, drawY + 8, artOptions)) {
+                        ctx.fillStyle = '#e84f62';
+                        ctx.fillRect(drawX - 7, drawY - 2, 3, 3);
+                        ctx.fillRect(drawX + 4, drawY - 5, 3, 3);
+                        ctx.fillRect(drawX + 1, drawY + 5, 3, 3);
+                        ctx.fillStyle = 'rgba(255, 226, 185, 0.72)';
+                        ctx.fillRect(drawX + 5, drawY - 5, 1, 1);
                         continue;
                     }
                     ctx.fillStyle = '#5b8b2f';
@@ -2061,15 +2091,19 @@
                     continue;
                 }
                 this.performanceStats.visibleAnimals += 1;
-                ctx.fillStyle = '#7f5938';
+                ctx.fillStyle = '#a56e3e';
                 ctx.beginPath();
                 ctx.ellipse(animal.x, animal.y, 10, 7, 0, 0, Math.PI * 2);
                 ctx.fill();
                 if (!simplifiedAnimals || nearCamp || hasPressure) {
-                    ctx.fillRect(animal.x + 5, animal.y - 5, 7, 2);
+                    ctx.fillStyle = '#6a4127';
+                    ctx.fillRect(animal.x + 5, animal.y - 5, 7, 4);
+                    ctx.fillStyle = '#ead8ac';
+                    ctx.fillRect(animal.x - 9, animal.y - 2, 4, 4);
                     ctx.fillStyle = '#3b2617';
                     ctx.fillRect(animal.x - 6, animal.y + 4, 2, 5);
                     ctx.fillRect(animal.x + 3, animal.y + 4, 2, 5);
+                    ctx.fillRect(animal.x + 10, animal.y - 5, 2, 2);
                 }
             }
 
@@ -2330,6 +2364,18 @@
                 if (!this.isCircleVisible(bounds, front.x, front.y, radius + 28, 28)) {
                     continue;
                 }
+                const attackers = this.world.getBattlefrontAttackers
+                    ? this.world.getBattlefrontAttackers(front)
+                    : (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
+                const defenders = (front.mode === 'outbound' || front.mode === 'intercolonial')
+                    ? (this.world.getBattlefrontDefenders
+                        ? this.world.getBattlefrontDefenders(front)
+                        : (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0))
+                    : this.world.colonists.filter((colonist) =>
+                        colonist.alive &&
+                        colonist.assignedBattlefrontId === front.id
+                    );
+                this.drawBattleArmyPresentation(ctx, front, attackers, defenders, alpha);
                 if (front.formation?.attackerOrigin) {
                     ctx.strokeStyle = `rgba(218, 141, 115, ${0.28 * alpha})`;
                     ctx.lineWidth = 2;
@@ -2436,6 +2482,33 @@
                     ctx.fill();
                 }
 
+                const rallyingSide = front.orderState?.attackers === 'rally'
+                    ? 'Attackers rally'
+                    : front.orderState?.defenders === 'rally'
+                        ? 'Defenders rally'
+                        : null;
+                if (rallyingSide) {
+                    const rallyPulse = 3 + Math.sin(this.world.elapsed * 5) * 2;
+                    ctx.strokeStyle = `rgba(246, 211, 112, ${0.72 * alpha})`;
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([4, 3]);
+                    ctx.beginPath();
+                    ctx.arc(front.x, front.y, radius + 7 + rallyPulse, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = `rgba(255, 237, 172, ${0.95 * alpha})`;
+                    ctx.font = 'bold 8px Georgia';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(rallyingSide, front.x, front.y - radius - 19);
+                    ctx.textAlign = 'start';
+                } else if (front.phase === 'muster') {
+                    ctx.fillStyle = `rgba(247, 224, 178, ${0.9 * alpha})`;
+                    ctx.font = 'bold 8px Georgia';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Marching to muster', front.x, front.y - radius - 19);
+                    ctx.textAlign = 'start';
+                }
+
                 if (detailedOverlay) {
                     ctx.fillStyle = `rgba(70, 24, 19, ${0.8 * alpha})`;
                     ctx.fillRect(front.x - 16, front.y - radius - 12, 32, 4);
@@ -2457,24 +2530,14 @@
                 ctx.lineTo(front.x - 5, front.y + 5);
                 ctx.stroke();
 
-                const attackers = this.world.getBattlefrontAttackers
-                    ? this.world.getBattlefrontAttackers(front)
-                    : (front.attackers || []).filter((attacker) => attacker.alive && attacker.hp > 0);
                 for (const attacker of attackers) {
+                    this.drawBattleUnitMarker(ctx, attacker, 'attackers', front, alpha);
                     if (!this.drawFactionUnitSprite(ctx, attacker)) {
                         this.drawBattleFighter(ctx, attacker.x, attacker.y, '#b6584e', '#f0b5aa', true, attacker.posture === 'engaged');
                     }
+                    this.drawBattleUnitHealth(ctx, attacker, 'attackers', front, alpha);
                 }
 
-                const defenders = (front.mode === 'outbound' || front.mode === 'intercolonial')
-                    ? (this.world.getBattlefrontDefenders
-                        ? this.world.getBattlefrontDefenders(front)
-                        : (front.defenders || []).filter((defender) => defender.alive && defender.hp > 0))
-                    : this.world.colonists.filter((colonist) =>
-                        colonist.alive &&
-                        (colonist.intent === 'war' || colonist.intent === 'protect') &&
-                        distance(colonist, front) < 78
-                    );
                 if (front.formation?.defenderAnchor && defenders.length > 0) {
                     ctx.strokeStyle = `rgba(141, 208, 135, ${0.32 * alpha})`;
                     ctx.lineWidth = 1.4;
@@ -2483,6 +2546,7 @@
                     ctx.stroke();
                 }
                 for (const defender of defenders) {
+                    this.drawBattleUnitMarker(ctx, defender, 'defenders', front, alpha);
                     if (front.mode === 'outbound' || front.mode === 'intercolonial') {
                         if (!this.drawFactionUnitSprite(ctx, defender)) {
                             this.drawBattleFighter(ctx, defender.x, defender.y, '#587348', '#d6e5b8', false, defender.posture === 'engaged');
@@ -2494,7 +2558,9 @@
                         ctx.arc(defender.x, defender.y, 13.5, 0, Math.PI * 2);
                         ctx.stroke();
                     }
+                    this.drawBattleUnitHealth(ctx, defender, 'defenders', front, alpha);
                 }
+                this.drawBattleVolleys(ctx, front, attackers, defenders, alpha);
             }
             for (const burst of this.world.battleBursts || []) {
                 const alpha = Math.max(0, Math.min(1, burst.ttl / Math.max(0.1, burst.maxTtl || burst.ttl || 1)));
@@ -2504,6 +2570,21 @@
                 ctx.beginPath();
                 ctx.arc(burst.x, burst.y, 4 + (1 - alpha) * 12, 0, Math.PI * 2);
                 ctx.fill();
+                if (burst.type !== 'building') {
+                    ctx.save();
+                    ctx.translate(burst.x, burst.y);
+                    ctx.rotate((1 - alpha) * 0.8);
+                    ctx.strokeStyle = `rgba(255, 241, 185, ${(0.9 * alpha).toFixed(3)})`;
+                    ctx.lineWidth = 1.4;
+                    for (let ray = 0; ray < 4; ray += 1) {
+                        ctx.rotate(Math.PI * 0.5);
+                        ctx.beginPath();
+                        ctx.moveTo(3, 0);
+                        ctx.lineTo(7 + (1 - alpha) * 5, 0);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                }
                 if (detailedOverlay) {
                     ctx.strokeStyle = burst.type === 'building'
                         ? `rgba(97, 54, 35, ${(0.7 * alpha).toFixed(3)})`
@@ -2514,6 +2595,317 @@
                     ctx.stroke();
                 }
             }
+        }
+
+        getBattleUnitCenter(units, fallback) {
+            const living = (units || []).filter((unit) =>
+                unit && unit.alive !== false && (unit.hp == null || unit.hp > 0)
+            );
+            if (!living.length) {
+                return { x: fallback.x, y: fallback.y };
+            }
+            return {
+                x: living.reduce((sum, unit) => sum + unit.x, 0) / living.length,
+                y: living.reduce((sum, unit) => sum + unit.y, 0) / living.length
+            };
+        }
+
+        drawBattleArmyPresentation(ctx, front, attackers, defenders, alpha) {
+            const attackerFallback = front.formation?.attackerOrigin || front;
+            const defenderFallback = front.formation?.defenderOrigin || front.formation?.defenderAnchor || front;
+            const attackerCenter = this.getBattleUnitCenter(attackers, attackerFallback);
+            const defenderCenter = this.getBattleUnitCenter(defenders, defenderFallback);
+            const direction = front.formation?.advanceVector || { x: 1, y: 0 };
+            const angle = Math.atan2(direction.y, direction.x);
+
+            this.drawArmyFootprint(ctx, attackerCenter, angle, front.scale, 'rgba(169, 58, 49, ', alpha);
+            this.drawArmyFootprint(ctx, defenderCenter, angle, front.scale, 'rgba(66, 126, 72, ', alpha);
+            this.drawArmyRankSilhouettes(ctx, attackerCenter, angle, attackers.length, '#a8453d', '#f0b29e', alpha);
+            this.drawArmyRankSilhouettes(ctx, defenderCenter, angle, defenders.length, '#4e8050', '#cce1ad', alpha);
+
+            if (front.phase === 'muster') {
+                this.drawArmyMarchTrails(ctx, attackers, direction, 'rgba(225, 155, 119, ', alpha);
+                this.drawArmyMarchTrails(ctx, defenders, { x: -direction.x, y: -direction.y }, 'rgba(146, 202, 135, ', alpha);
+            }
+
+            this.drawCommanderStandard(ctx, front, 'attackers', attackerCenter, attackers.length, alpha);
+            this.drawCommanderStandard(ctx, front, 'defenders', defenderCenter, defenders.length, alpha);
+            this.drawArmyStrengthPlate(ctx, front, 'attackers', attackerCenter, attackers.length, alpha);
+            this.drawArmyStrengthPlate(ctx, front, 'defenders', defenderCenter, defenders.length, alpha);
+
+            if (front.orderState?.attackers === 'rally') {
+                this.drawArmyRallyWaves(ctx, attackerCenter, '#f1b863', alpha);
+            }
+            if (front.orderState?.defenders === 'rally') {
+                this.drawArmyRallyWaves(ctx, defenderCenter, '#f0d477', alpha);
+            }
+
+            if (front.resolved) {
+                const winner = front.outcome === 'attackers' ? attackerCenter : defenderCenter;
+                const color = front.outcome === 'attackers' ? '#f2b38f' : '#bde5ad';
+                ctx.save();
+                ctx.fillStyle = 'rgba(39, 28, 20, 0.88)';
+                ctx.fillRect(winner.x - 25, winner.y - 43, 50, 13);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.2;
+                ctx.strokeRect(winner.x - 25, winner.y - 43, 50, 13);
+                ctx.fillStyle = color;
+                ctx.font = 'bold 8px Georgia';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('VICTORY', winner.x, winner.y - 36.5);
+                ctx.restore();
+            }
+        }
+
+        drawArmyFootprint(ctx, center, angle, scale, colorPrefix, alpha) {
+            ctx.save();
+            ctx.translate(center.x, center.y + 3);
+            ctx.rotate(angle);
+            const pulse = 1 + Math.sin(this.world.elapsed * 2.4) * 0.035;
+            ctx.scale(pulse, pulse);
+            ctx.fillStyle = `${colorPrefix}${(0.1 * alpha).toFixed(3)})`;
+            ctx.strokeStyle = `${colorPrefix}${(0.5 * alpha).toFixed(3)})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 25 + scale * 12, 15 + scale * 7, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.strokeStyle = `${colorPrefix}${(0.22 * alpha).toFixed(3)})`;
+            ctx.setLineDash([3, 4]);
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 19 + scale * 9, 10 + scale * 5, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        drawArmyMarchTrails(ctx, units, direction, colorPrefix, alpha) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            for (let index = 0; index < units.length; index += 1) {
+                const unit = units[index];
+                const speed = Math.hypot(unit.vx || 0, unit.vy || 0);
+                const length = 6 + Math.min(10, speed * 0.22);
+                const trailAlpha = (0.16 + (index % 3) * 0.04) * alpha;
+                ctx.strokeStyle = `${colorPrefix}${trailAlpha.toFixed(3)})`;
+                ctx.lineWidth = 1.2;
+                ctx.beginPath();
+                ctx.moveTo(unit.x - direction.x * 4, unit.y - direction.y * 4 + 4);
+                ctx.lineTo(unit.x - direction.x * length, unit.y - direction.y * length + 4);
+                ctx.stroke();
+                const dust = 1.2 + ((index + Math.floor(this.world.elapsed * 6)) % 3) * 0.45;
+                ctx.fillStyle = `rgba(177, 142, 99, ${(0.13 * alpha).toFixed(3)})`;
+                ctx.beginPath();
+                ctx.arc(unit.x - direction.x * (length + 2), unit.y - direction.y * (length + 2) + 5, dust, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        drawArmyRankSilhouettes(ctx, center, angle, unitCount, bodyColor, headColor, alpha) {
+            const visible = Math.max(3, Math.min(10, unitCount + 2));
+            const advance = { x: Math.cos(angle), y: Math.sin(angle) };
+            const flank = { x: -advance.y, y: advance.x };
+            ctx.save();
+            ctx.globalAlpha = 0.38 * alpha;
+            for (let index = 0; index < visible; index += 1) {
+                const row = Math.floor(index / 4);
+                const column = index % 4;
+                const columnsInRow = Math.min(4, visible - row * 4);
+                const lateral = (column - (columnsInRow - 1) * 0.5) * 8;
+                const depth = (row - 0.5) * 8;
+                const x = center.x + flank.x * lateral - advance.x * depth;
+                const y = center.y + flank.y * lateral - advance.y * depth;
+                ctx.fillStyle = 'rgba(20, 16, 13, 0.3)';
+                ctx.beginPath();
+                ctx.ellipse(x, y + 4, 3.3, 1.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = bodyColor;
+                ctx.beginPath();
+                ctx.arc(x, y + 0.5, 2.8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = headColor;
+                ctx.beginPath();
+                ctx.arc(x, y - 3, 1.55, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        drawCommanderStandard(ctx, front, side, center, unitCount, alpha) {
+            const attacker = side === 'attackers';
+            const commander = front.commanders?.[side]?.name || (attacker ? front.colonyName : 'Settlement Guard');
+            const flagColor = attacker ? '#b94e43' : '#568b55';
+            const trimColor = attacker ? '#f2c09f' : '#d0e8ad';
+            const x = center.x - 18;
+            const y = center.y - 18;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(53, 35, 24, 0.92)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y + 20);
+            ctx.lineTo(x, y - 15);
+            ctx.stroke();
+            ctx.fillStyle = flagColor;
+            ctx.strokeStyle = trimColor;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 1, y - 14);
+            ctx.lineTo(x + 21, y - 10);
+            ctx.lineTo(x + 15, y - 3);
+            ctx.lineTo(x + 21, y + 3);
+            ctx.lineTo(x + 1, y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = trimColor;
+            ctx.font = 'bold 8px Georgia';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(Math.max(0, unitCount)), x + 9, y - 5);
+
+            const label = commander.length > 15 ? `${commander.slice(0, 14)}…` : commander;
+            const labelWidth = Math.max(42, ctx.measureText(label).width + 10);
+            const labelY = attacker ? center.y - 49 : center.y + 25;
+            ctx.fillStyle = 'rgba(37, 27, 21, 0.88)';
+            ctx.fillRect(center.x - labelWidth * 0.5, labelY, labelWidth, 13);
+            ctx.strokeStyle = attacker ? 'rgba(236, 154, 126, 0.8)' : 'rgba(164, 216, 147, 0.8)';
+            ctx.strokeRect(center.x - labelWidth * 0.5, labelY, labelWidth, 13);
+            ctx.fillStyle = '#fff0d2';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, center.x, labelY + 6.5);
+            ctx.restore();
+        }
+
+        drawArmyStrengthPlate(ctx, front, side, center, unitCount, alpha) {
+            const attacker = side === 'attackers';
+            const health = attacker ? front.attackerHealth : front.defenderHealth;
+            const maxHealth = attacker ? front.attackerMaxHealth : front.defenderMaxHealth;
+            const ratio = Math.max(0, Math.min(1, health / Math.max(1, maxHealth)));
+            const width = 42;
+            const y = attacker ? center.y - 33 : center.y + 16;
+            ctx.save();
+            ctx.fillStyle = `rgba(29, 23, 18, ${(0.86 * alpha).toFixed(3)})`;
+            ctx.fillRect(center.x - width * 0.5, y, width, 5);
+            ctx.fillStyle = attacker ? '#dc6557' : '#79bc69';
+            ctx.fillRect(center.x - width * 0.5 + 1, y + 1, (width - 2) * ratio, 3);
+            ctx.fillStyle = '#f7e9ca';
+            ctx.font = 'bold 6px Georgia';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(`${unitCount}`, center.x + width * 0.5, y - 1);
+            ctx.restore();
+        }
+
+        drawArmyRallyWaves(ctx, center, color, alpha) {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.8;
+            for (let wave = 0; wave < 3; wave += 1) {
+                const cycle = (this.world.elapsed * 0.7 + wave / 3) % 1;
+                ctx.globalAlpha = alpha * (1 - cycle) * 0.75;
+                ctx.beginPath();
+                ctx.arc(center.x, center.y, 16 + cycle * 30, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        drawBattleUnitMarker(ctx, unit, side, front, alpha) {
+            const attacker = side === 'attackers';
+            const engaged = front.phase === 'engage' && (unit.posture === 'engaged' || unit.battleRole === 'frontline');
+            ctx.save();
+            ctx.strokeStyle = attacker
+                ? `rgba(225, 91, 76, ${(engaged ? 0.8 : 0.42) * alpha})`
+                : `rgba(112, 190, 100, ${(engaged ? 0.8 : 0.42) * alpha})`;
+            ctx.lineWidth = engaged ? 1.8 : 1.1;
+            ctx.beginPath();
+            ctx.ellipse(unit.x, unit.y + 4, engaged ? 8 : 6.5, engaged ? 4.5 : 3.5, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        drawBattleUnitHealth(ctx, unit, side, front, alpha) {
+            const health = unit.hp == null ? unit.stats?.health : unit.hp;
+            const maxHealth = unit.maxHp == null ? 100 : unit.maxHp;
+            const ratio = Math.max(0, Math.min(1, (health || 0) / Math.max(1, maxHealth || 1)));
+            if (front.phase !== 'engage' && ratio > 0.98) {
+                return;
+            }
+            const width = 12;
+            const y = unit.y - 13;
+            ctx.fillStyle = `rgba(28, 20, 17, ${(0.8 * alpha).toFixed(3)})`;
+            ctx.fillRect(unit.x - width * 0.5, y, width, 2.5);
+            ctx.fillStyle = side === 'attackers' ? '#ee6e60' : '#86cf75';
+            ctx.fillRect(unit.x - width * 0.5 + 0.7, y + 0.7, (width - 1.4) * ratio, 1.1);
+        }
+
+        drawBattleVolleys(ctx, front, attackers, defenders, alpha) {
+            if (front.phase !== 'engage' || front.resolved || attackers.length < 3 || defenders.length < 3) {
+                return;
+            }
+            const attackerCenter = this.getBattleUnitCenter(attackers, front.formation.attackerOrigin);
+            const defenderCenter = this.getBattleUnitCenter(defenders, front.formation.defenderAnchor);
+            this.drawVolleyArc(ctx, attackerCenter, defenderCenter, '#e8aa76', alpha * 0.36, -1);
+            this.drawVolleyArc(ctx, defenderCenter, attackerCenter, '#b8d99a', alpha * 0.3, 1);
+            this.drawVolleyFlight(ctx, attackerCenter, defenderCenter, (this.world.elapsed * 0.52) % 1, '#f4c28e', alpha, 0);
+            this.drawVolleyFlight(ctx, defenderCenter, attackerCenter, (this.world.elapsed * 0.47 + 0.45) % 1, '#d8edb0', alpha * 0.88, 1);
+        }
+
+        drawVolleyArc(ctx, from, to, color, alpha, bendDirection) {
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const length = Math.hypot(dx, dy) || 1;
+            const px = -dy / length;
+            const py = dx / length;
+            const bend = Math.min(18, Math.max(8, length * 0.18)) * bendDirection;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = alpha;
+            ctx.lineWidth = 0.8;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.moveTo(from.x, from.y - 3);
+            ctx.quadraticCurveTo((from.x + to.x) * 0.5 + px * bend, (from.y + to.y) * 0.5 + py * bend - 12, to.x, to.y - 3);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        drawVolleyFlight(ctx, from, to, phase, color, alpha, directionSeed) {
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const length = Math.hypot(dx, dy) || 1;
+            const nx = dx / length;
+            const ny = dy / length;
+            const px = -ny;
+            const py = nx;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = 1.1;
+            ctx.globalAlpha = 0.7 * alpha;
+            for (let arrow = 0; arrow < 3; arrow += 1) {
+                const t = (phase + arrow * 0.16) % 1;
+                if (t < 0.08 || t > 0.92) {
+                    continue;
+                }
+                const lane = (arrow - 1) * 7 + (directionSeed ? 2 : -2);
+                const arc = Math.sin(t * Math.PI) * (10 + arrow * 2);
+                const x = from.x + dx * t + px * lane;
+                const y = from.y + dy * t + py * lane - arc;
+                const trail = 6;
+                ctx.beginPath();
+                ctx.moveTo(x - nx * trail + px * 1.5, y - ny * trail + py * 1.5);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x - nx * 3 - px * 2, y - ny * 3 - py * 2);
+                ctx.lineTo(x - nx * 3 + px * 2, y - ny * 3 + py * 2);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
         }
 
         drawDetachedFactionUnits(ctx) {
@@ -4256,20 +4648,50 @@
         }
 
         drawWeatherNearGround(ctx) {
-            if (!this.shouldRefreshLayer('weather-near-ground', this.performanceProfile.nearGroundInterval)) {
-                return;
-            }
             const weatherState = this.world.getWeatherState();
-            const density = this.performanceProfile.nearGroundDensity;
+            const bounds = this.getViewBounds();
+            const density = this.getAdaptiveWeatherDensity() * this.performanceProfile.nearGroundDensity;
             if (weatherState.splashRate > 0.04) {
                 const transitionFade = 0.4 + weatherState.transition * 0.6;
                 ctx.fillStyle = `rgba(202, 231, 255, ${(0.08 + weatherState.splashRate * 0.14) * transitionFade})`;
-                const splashCount = Math.max(4, Math.round((8 + weatherState.splashRate * 20) * transitionFade * density));
+                const splashCount = Math.min(
+                    Math.round(this.performanceProfile.weatherPrimitiveCap * 0.16),
+                    Math.max(4, Math.round((8 + weatherState.splashRate * 18) * transitionFade * density))
+                );
                 for (let i = 0; i < splashCount; i++) {
-                    const x = this.snapPixel((i * 151 + this.world.elapsed * (70 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
-                    const y = this.snapPixel((i * 89 + this.world.elapsed * (90 + weatherState.intensity * 70)) % WORLD_HEIGHT, 2);
+                    const x = this.snapPixel(this.wrapToView(
+                        bounds.left + i * 151 + this.world.elapsed * (70 + weatherState.intensity * 80),
+                        bounds.left,
+                        bounds.width
+                    ), 2);
+                    const y = this.snapPixel(this.wrapToView(
+                        bounds.top + i * 89 + this.world.elapsed * (90 + weatherState.intensity * 70),
+                        bounds.top,
+                        bounds.height
+                    ), 2);
                     ctx.fillRect(x, y, 4, 2);
                     ctx.fillRect(x + 2, y - 2, 2, 6);
+                }
+                this.performanceStats.weatherPrimitives += splashCount;
+
+                if (weatherState.puddleLevel > 0.12) {
+                    const rippleCount = Math.max(2, Math.round(
+                        (3 + weatherState.puddleLevel * 9) *
+                        density *
+                        this.performanceProfile.rainRippleDensity
+                    ));
+                    ctx.strokeStyle = `rgba(205, 233, 249, ${(0.1 + weatherState.puddleLevel * 0.18) * transitionFade})`;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    for (let i = 0; i < rippleCount; i++) {
+                        const phase = (this.world.elapsed * 1.8 + i * 0.37) % 1;
+                        const x = this.snapPixel(this.wrapToView(bounds.left + i * 181 + this.world.elapsed * 23, bounds.left, bounds.width), 2);
+                        const y = this.snapPixel(this.wrapToView(bounds.top + i * 107 + this.world.elapsed * 31, bounds.top, bounds.height), 2);
+                        ctx.moveTo(x + 3 + phase * 5, y);
+                        ctx.ellipse(x, y, 3 + phase * 5, 1.5 + phase * 2.5, 0, 0, Math.PI * 2);
+                    }
+                    ctx.stroke();
+                    this.performanceStats.weatherPrimitives += rippleCount;
                 }
             }
             if (weatherState.leafDrift > 0.08) {
@@ -4279,18 +4701,20 @@
                     : 'rgba(173, 145, 92, 0.3)';
                 for (let i = 0; i < driftCount; i++) {
                     const sway = Math.sin(this.world.elapsed * 0.9 + i) * 12;
-                    const x = this.snapPixel((i * 133 + this.world.elapsed * (35 + weatherState.windX * 45) + sway) % WORLD_WIDTH, 2);
-                    const y = this.snapPixel((i * 81 + this.world.elapsed * (26 + weatherState.windY * 52)) % WORLD_HEIGHT, 2);
+                    const x = this.snapPixel(this.wrapToView(bounds.left + i * 133 + this.world.elapsed * (35 + weatherState.windX * 45) + sway, bounds.left, bounds.width), 2);
+                    const y = this.snapPixel(this.wrapToView(bounds.top + i * 81 + this.world.elapsed * (26 + weatherState.windY * 52), bounds.top, bounds.height), 2);
                     ctx.fillRect(x, y, 4, 2);
                     ctx.fillRect(x + ((i % 2) ? 2 : 0), y + 2, 2, 2);
                 }
+                this.performanceStats.weatherPrimitives += driftCount;
             }
         }
 
         drawWeather(ctx) {
             const weatherState = this.world.getWeatherState();
+            const bounds = this.getViewBounds();
             const zoomOut = this.getZoomOutFactor();
-            const densityScale = (1 - zoomOut * 0.22) * this.performanceProfile.weatherDensity;
+            const densityScale = (1 - zoomOut * 0.22) * this.getAdaptiveWeatherDensity();
             const gustStrength = weatherState.gustStrength || 0;
             const transitionFade = 0.35 + weatherState.transition * 0.65;
             if (weatherState.fogDensity > 0.04 || weatherState.type === 'Cloudy' || weatherState.type === 'Rain' || weatherState.type === 'Storm') {
@@ -4316,34 +4740,82 @@
             }
 
             if (weatherState.precipitationType === 'rain') {
+                const primitiveCap = this.performanceProfile.weatherPrimitiveCap;
                 ctx.strokeStyle = weatherState.type === 'Storm'
                     ? `rgba(170, 205, 255, ${(0.2 + weatherState.intensity * 0.28) * transitionFade})`
                     : `rgba(190, 226, 255, ${(0.16 + weatherState.intensity * 0.22) * transitionFade})`;
-                ctx.lineWidth = weatherState.type === 'Storm' ? 2 : 1;
-                const dropCount = Math.max(20, Math.round((56 + weatherState.intensity * 132) * densityScale * transitionFade));
+                ctx.lineWidth = weatherState.type === 'Storm' ? 1.5 : 1;
+                const dropCount = Math.min(
+                    Math.round(primitiveCap * 0.6),
+                    Math.max(28, Math.round((64 + weatherState.intensity * 112) * densityScale * transitionFade))
+                );
                 const dx = this.snapPixel(weatherState.windX * (12 + gustStrength * 8), 1);
                 const dy = this.snapPixel(10 + weatherState.intensity * 8 + Math.abs(weatherState.windY) * 3 + gustStrength * 2, 1);
+                ctx.beginPath();
                 for (let i = 0; i < dropCount; i++) {
-                    const x = this.snapPixel((i * 97 + this.world.elapsed * (180 + weatherState.intensity * 120)) % WORLD_WIDTH, 2);
-                    const y = this.snapPixel((i * 57 + this.world.elapsed * (240 + weatherState.intensity * 150)) % WORLD_HEIGHT, 2);
-                    ctx.beginPath();
+                    const depth = 0.72 + (i % 5) * 0.07;
+                    const x = this.snapPixel(this.wrapToView(
+                        bounds.left + i * 97 + this.world.elapsed * (180 + weatherState.intensity * 120) * depth,
+                        bounds.left - 18,
+                        bounds.width + 36
+                    ), 2);
+                    const y = this.snapPixel(this.wrapToView(
+                        bounds.top + i * 57 + this.world.elapsed * (240 + weatherState.intensity * 150) * depth,
+                        bounds.top - 18,
+                        bounds.height + 36
+                    ), 2);
                     ctx.moveTo(x, y);
-                    ctx.lineTo(x - dx, y + dy);
+                    ctx.lineTo(x - dx * depth, y + dy * depth);
+                }
+                ctx.stroke();
+                this.performanceStats.weatherPrimitives += dropCount;
+
+                const foregroundCount = Math.min(
+                    Math.round(primitiveCap * 0.18),
+                    Math.max(6, Math.round(
+                        (8 + weatherState.intensity * 26) *
+                        densityScale *
+                        transitionFade *
+                        this.performanceProfile.rainForegroundDensity
+                    ))
+                );
+                if (foregroundCount > 0) {
+                    ctx.strokeStyle = weatherState.type === 'Storm'
+                        ? `rgba(211, 232, 255, ${(0.22 + weatherState.intensity * 0.25) * transitionFade})`
+                        : `rgba(220, 239, 252, ${(0.14 + weatherState.intensity * 0.18) * transitionFade})`;
+                    ctx.lineWidth = weatherState.type === 'Storm' ? 2.5 : 1.6;
+                    ctx.beginPath();
+                    for (let i = 0; i < foregroundCount; i++) {
+                        const x = this.snapPixel(this.wrapToView(
+                            bounds.left + i * 173 + this.world.elapsed * (250 + weatherState.intensity * 160),
+                            bounds.left - 28,
+                            bounds.width + 56
+                        ), 2);
+                        const y = this.snapPixel(this.wrapToView(
+                            bounds.top + i * 109 + this.world.elapsed * (330 + weatherState.intensity * 190),
+                            bounds.top - 30,
+                            bounds.height + 60
+                        ), 2);
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x - dx * 1.35, y + dy * 1.7);
+                    }
                     ctx.stroke();
+                    this.performanceStats.weatherPrimitives += foregroundCount;
                 }
                 if (weatherState.intensity > 0.42) {
                     ctx.fillStyle = weatherState.type === 'Storm'
                         ? `rgba(212, 234, 255, ${(0.16 + weatherState.intensity * 0.14) * transitionFade})`
                         : `rgba(206, 231, 248, ${(0.12 + weatherState.intensity * 0.12) * transitionFade})`;
-                    const clusterCount = Math.max(4, Math.round((10 + weatherState.intensity * 20) * densityScale * transitionFade));
+                    const clusterCount = Math.min(32, Math.max(4, Math.round((8 + weatherState.intensity * 16) * densityScale * transitionFade)));
                     for (let i = 0; i < clusterCount; i++) {
-                        const x = this.snapPixel((i * 73 + this.world.elapsed * (132 + weatherState.intensity * 80)) % WORLD_WIDTH, 2);
-                        const y = this.snapPixel((i * 49 + this.world.elapsed * (180 + weatherState.intensity * 120)) % WORLD_HEIGHT, 2);
+                        const x = this.snapPixel(this.wrapToView(bounds.left + i * 73 + this.world.elapsed * (132 + weatherState.intensity * 80), bounds.left, bounds.width), 2);
+                        const y = this.snapPixel(this.wrapToView(bounds.top + i * 49 + this.world.elapsed * (180 + weatherState.intensity * 120), bounds.top, bounds.height), 2);
                         ctx.fillRect(x, y, 2, 8);
                         if (weatherState.type === 'Storm' && i % 3 === 0) {
                             ctx.fillRect(x - 2, y + 2, 2, 6);
                         }
                     }
+                    this.performanceStats.weatherPrimitives += clusterCount;
                 }
             } else if (weatherState.precipitationType === 'snow') {
                 ctx.fillStyle = `rgba(240, 247, 255, ${(0.22 + weatherState.intensity * 0.22) * transitionFade})`;

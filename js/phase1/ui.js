@@ -256,6 +256,20 @@
             const actions = {
                 'btn-god-mode': () => this.world.togglePause(),
                 'btn-god-focus': () => this.renderer.centerOn(this.world.camp.x, this.world.camp.y),
+                'btn-battle-focus': () => {
+                    const front = (this.world.battlefronts || []).find((entry) => !entry.resolved && entry.ttl > 0) || null;
+                    if (!front) {
+                        return;
+                    }
+                    this.renderer.centerOn(front.x, front.y);
+                    if (this.renderer.zoom < 2.75) {
+                        const cx = this.renderer.viewportWidth * 0.5;
+                        const cy = this.renderer.viewportHeight * 0.5;
+                        this.renderer.zoomAt(cx, cy, 2.75 / this.renderer.zoom);
+                    }
+                    this.renderer.render();
+                    this.refresh(true);
+                },
                 'btn-spawn-food': () => this.world.spawnFoodNearCamp(),
                 'btn-spawn-water': () => this.world.spawnWaterSourceNearSelection(),
                 'btn-spawn-colonist': () => this.world.addColonist(),
@@ -655,7 +669,7 @@
                 0
             );
             const storageParts = [
-                `Food ${camp.food.toFixed(0)}`,
+                `Food ${camp.food.toFixed(0)} · Storage ${this.world.getStorageCapacity().toFixed(0)} · Reserve ${this.world.getDesiredFoodReserve().toFixed(0)}`,
                 `Water ${camp.water.toFixed(0)}`,
                 `Logs ${camp.materials.logs.toFixed(0)}`
             ];
@@ -1160,11 +1174,17 @@
                 memoryLines.push(`Known food: ${(selected.memory.resources?.berries || []).length + (selected.memory.resources?.wildAnimal || []).length}`);
                 memoryLines.push(`Danger zones: ${(selected.memory.dangerZones || []).length}`);
                 memoryLines.push(`Shelter spots: ${(selected.memory.shelterSpots || []).length}`);
-                memoryLines.push(`Failed actions: ${Object.keys(selected.memory.failedActions || {}).length}`);
+                memoryLines.push(`Discoveries: ${(selected.memory.discoveries || []).slice(0, 5).join(', ') || 'none'}`);
+                memoryLines.push(`Failed actions: ${JSON.stringify(selected.memory.failedActions || {})}`);
+                memoryLines.push(`Successful actions: ${JSON.stringify(selected.memory.successfulActions || {})}`);
             } else {
                 memoryLines.push(`Colony danger zones: ${(this.world.colonyKnowledge?.dangerZones || []).length}`);
                 memoryLines.push(`Colony shelters: ${(this.world.colonyKnowledge?.shelterSpots || []).length}`);
                 memoryLines.push(`Discoveries: ${(this.world.colonyKnowledge?.discoveries || []).slice(0, 5).join(', ') || 'none'}`);
+                const transfer = this.world.knowledgeTransfers?.[0];
+                memoryLines.push(transfer
+                    ? `Latest transfer: ${transfer.teacher} -> ${transfer.learner} (${transfer.modes.join(', ')})`
+                    : 'Latest transfer: none');
             }
             setNodeText('god-inspect-memory', memoryLines.join('\n'));
 
@@ -1172,11 +1192,16 @@
             if (this.isColonistEntity(selected)) {
                 thoughtLines.push(`Current intent: ${selected.intent || 'none'}`);
                 thoughtLines.push(`Current need: ${selected.lastNeed || 'none'}`);
+                thoughtLines.push(`Chosen decision: ${selected.lastChosenDecision || 'none'}`);
                 const planStep = selected.plan[selected.planStep];
                 thoughtLines.push(`Plan step: ${planStep ? `${planStep.action} (${planStep.kind})` : 'none'}`);
+                if (selected.lastPlanFailure) {
+                    thoughtLines.push(`Last failure: ${selected.lastPlanFailure.action} — ${selected.lastPlanFailure.reason}`);
+                }
                 thoughtLines.push('Top scores:');
                 for (const entry of (selected.lastDecisionScores || []).slice(0, 5)) {
-                    thoughtLines.push(`${entry.key}: ${entry.score} [${entry.need}]`);
+                    const availability = entry.viable === false ? ` — blocked: ${entry.rejectionReason}` : '';
+                    thoughtLines.push(`${entry.key}: ${entry.score} [${entry.need}]${availability}`);
                 }
                 if (!selected.lastDecisionScores?.length) {
                     thoughtLines.push('No decision trace yet.');

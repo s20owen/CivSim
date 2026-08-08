@@ -14,6 +14,15 @@
         'sounds/Thunder.mp3'
     ];
 
+    function createWorldSeed() {
+        if (window.crypto?.getRandomValues) {
+            const values = new Uint32Array(1);
+            window.crypto.getRandomValues(values);
+            return values[0] || 1337;
+        }
+        return ((Date.now() ^ Math.floor(Math.random() * 0xFFFFFFFF)) >>> 0) || 1337;
+    }
+
     class AmbientAudioController {
         constructor(world, renderer) {
             this.world = world;
@@ -277,7 +286,7 @@
         const initialRunSnapshot = loadCurrentRunSnapshot();
         let world = initialRunSnapshot
             ? PhaseOneSim.PhaseOneWorld.fromSaveState(initialRunSnapshot)
-            : new PhaseOneSim.PhaseOneWorld(1337, loadLineageMemory());
+            : new PhaseOneSim.PhaseOneWorld(createWorldSeed(), loadLineageMemory());
         const renderer = new PhaseOneSim.PhaseOneRenderer(canvas, world);
         const ui = new PhaseOneSim.PhaseOneUI(world, renderer);
         const ambientAudio = new AmbientAudioController(world, renderer);
@@ -447,7 +456,7 @@
 
         function respawnFromLineage(memory) {
             saveLineageMemory(memory);
-            const nextWorld = new PhaseOneSim.PhaseOneWorld(1337, memory);
+            const nextWorld = new PhaseOneSim.PhaseOneWorld(world.seed, memory);
             nextWorld.pushEvent(`Generation ${nextWorld.generation} autoloaded from extinction memory.`);
             swapWorld(nextWorld);
             extinctionHandled = false;
@@ -478,7 +487,7 @@
             const coarsePointer = typeof window.matchMedia === 'function'
                 ? window.matchMedia('(pointer: coarse)').matches
                 : false;
-            const mobile = coarsePointer || Math.min(window.innerWidth || 1280, window.innerHeight || 720) <= 820;
+            const mobile = coarsePointer || (window.innerWidth || 1280) <= 820;
             const dense = world.colonists.length >= 32;
             const veryDense = world.colonists.length >= 40;
             const fastSim = world.simulationSpeed >= 4;
@@ -489,28 +498,50 @@
             };
         }
 
-        function step(dt) {
+        function step(dt, options = {}) {
             const fixed = 1 / 30;
-            let remaining = Math.min(0.5, Math.max(0, dt));
+            const consumeFullDelta = Boolean(options.consumeFullDelta);
+            const requestedDelta = Math.max(0, dt);
+            let remaining = consumeFullDelta
+                ? requestedDelta
+                : Math.min(0.5, requestedDelta);
+            let droppedTime = consumeFullDelta ? 0 : Math.max(0, requestedDelta - remaining);
             const updateStart = performance.now();
             const frameProfile = getFrameStepProfile();
+            const fullDeterministicSlices = consumeFullDelta ? Math.floor(remaining / fixed) : 0;
+            const deterministicRemainder = consumeFullDelta
+                ? Math.max(0, remaining - fullDeterministicSlices * fixed)
+                : 0;
+            const maxSlices = consumeFullDelta
+                ? fullDeterministicSlices + (deterministicRemainder > 1e-9 ? 1 : 0)
+                : frameProfile.maxSlices;
             let slices = 0;
             const aggregatedBreakdown = {};
-            while (remaining > 0 && slices < frameProfile.maxSlices) {
-                const slice = Math.min(fixed, remaining);
+            const applySlice = (slice) => {
                 world.update(slice);
                 const sliceBreakdown = world.performanceTelemetry?.updateBreakdown || {};
                 Object.entries(sliceBreakdown).forEach(([key, value]) => {
                     aggregatedBreakdown[key] = (aggregatedBreakdown[key] || 0) + Number(value || 0);
                 });
-                remaining -= slice;
                 slices += 1;
-            }
-            if (remaining > 0) {
-                world.performanceTelemetry.droppedUpdateTime = Number(remaining.toFixed(3));
+            };
+            if (consumeFullDelta) {
+                for (let index = 0; index < fullDeterministicSlices; index += 1) {
+                    applySlice(fixed);
+                }
+                if (deterministicRemainder > 1e-9) {
+                    applySlice(deterministicRemainder);
+                }
+                remaining = 0;
             } else {
-                world.performanceTelemetry.droppedUpdateTime = 0;
+                while (remaining > 1e-9 && slices < maxSlices) {
+                    const slice = Math.min(fixed, remaining);
+                    applySlice(slice);
+                    remaining -= slice;
+                }
+                droppedTime += Math.max(0, remaining);
             }
+            world.performanceTelemetry.droppedUpdateTime = Number(droppedTime.toFixed(3));
             let hottestUpdateSection = null;
             let hottestUpdateMs = 0;
             Object.entries(aggregatedBreakdown).forEach(([key, value]) => {
@@ -526,8 +557,8 @@
             world.performanceTelemetry.hottestUpdateMs = Number(hottestUpdateMs.toFixed(2));
             world.performanceTelemetry.sliceCount = slices;
             world.performanceTelemetry.fixedStep = fixed;
-            world.performanceTelemetry.maxSlices = frameProfile.maxSlices;
-            if (remaining > 0) {
+            world.performanceTelemetry.maxSlices = maxSlices;
+            if (droppedTime > 0) {
                 world.performanceTelemetry.lastCatchupDropAt = performance.now();
             }
             lastUpdateDurationMs = performance.now() - updateStart;
@@ -600,7 +631,7 @@
         window.getAudioDebugState = () => ambientAudio.getDebugState();
         window.advanceTime = (ms = 16) => {
             manualStepping = true;
-            step(Math.max(0, ms) / 1000);
+            step(Math.max(0, ms) / 1000, { consumeFullDelta: true });
             ambientAudio.update();
             audioUpdateAccumulator = 0;
             renderer.recordFrameMetrics(Math.max(0, ms), lastUpdateDurationMs, lastUiDurationMs);
