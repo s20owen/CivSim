@@ -330,6 +330,22 @@ body {
     display: none;
 }
 
+.battle-focus-button {
+    appearance: none;
+    border: 1px solid #c79a54;
+    background: linear-gradient(180deg, #8b5527, #563319);
+    color: #fff0c8;
+    padding: 5px 8px;
+    cursor: pointer;
+    font: 700 0.7rem/1 var(--ui-font);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.battle-focus-button:hover {
+    filter: brightness(1.12);
+}
+
 #battle-meta {
     color: #f3ddb0;
     font-size: 0.78rem;
