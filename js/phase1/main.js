@@ -642,6 +642,13 @@
                 const payload = JSON.parse(world.getSummaryText());
                 payload.audio = ambientAudio.getDebugState();
                 payload.performance = renderer.getPerformanceSnapshot();
+                payload.camera = {
+                    x: Number(renderer.cameraX.toFixed(1)),
+                    y: Number(renderer.cameraY.toFixed(1)),
+                    zoom: Number(renderer.zoom.toFixed(3)),
+                    minZoom: renderer.minZoom,
+                    maxZoom: renderer.maxZoom
+                };
                 return JSON.stringify(payload);
             } catch {
                 return world.getSummaryText();

@@ -1,6 +1,10 @@
 (function () {
     const PhaseOneSim = window.PhaseOneSim || (window.PhaseOneSim = {});
 
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     function setText(id, value) {
         const node = document.getElementById(id);
         if (node && node.textContent !== value) {
@@ -79,6 +83,9 @@
             this.touchMode = null;
             this.touchDistance = 0;
             this.touchCenter = null;
+            this.gestureScale = 1;
+            this.activeTouchPointers = new Map();
+            this.lastPointerTouchAt = -Infinity;
             this.interactionFramePending = false;
             this.renderCache = Object.create(null);
             this.performanceProfile = this.detectPerformanceProfile();
@@ -475,6 +482,90 @@
         }
 
         bindCanvasSelection() {
+            const pointerPoints = () => Array.from(this.activeTouchPointers.values());
+            const pointerDistance = () => {
+                const points = pointerPoints();
+                return points.length >= 2 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0;
+            };
+            const pointerCenter = () => {
+                const points = pointerPoints();
+                if (points.length < 2) return null;
+                return { x: (points[0].x + points[1].x) * 0.5, y: (points[0].y + points[1].y) * 0.5 };
+            };
+            const notePointerTouch = () => {
+                this.lastPointerTouchAt = performance.now();
+            };
+            const ignoreLegacyTouch = () => performance.now() - this.lastPointerTouchAt < 500;
+
+            this.renderer.canvas.addEventListener('pointerdown', (event) => {
+                if (event.pointerType !== 'touch') return;
+                event.preventDefault();
+                notePointerTouch();
+                this.renderer.canvas.setPointerCapture?.(event.pointerId);
+                this.activeTouchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+                if (this.activeTouchPointers.size >= 2) {
+                    this.touchMode = 'pinch';
+                    this.touchDistance = pointerDistance();
+                    this.touchCenter = pointerCenter();
+                    this.lastPointer = null;
+                } else {
+                    this.touchMode = 'pan';
+                    this.dragDistance = 0;
+                    this.lastPointer = { x: event.clientX, y: event.clientY };
+                }
+            }, { passive: false });
+
+            this.renderer.canvas.addEventListener('pointermove', (event) => {
+                if (event.pointerType !== 'touch' || !this.activeTouchPointers.has(event.pointerId)) return;
+                event.preventDefault();
+                notePointerTouch();
+                this.activeTouchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+                if (this.activeTouchPointers.size >= 2) {
+                    const nextDistance = pointerDistance();
+                    const nextCenter = pointerCenter();
+                    if (this.touchDistance > 0 && this.touchCenter && nextCenter) {
+                        const zoomFactor = clamp(nextDistance / this.touchDistance, 0.92, 1.08);
+                        const rect = this.renderer.canvas.getBoundingClientRect();
+                        this.renderer.zoomAt(nextCenter.x - rect.left, nextCenter.y - rect.top, zoomFactor);
+                        this.renderer.panBy(nextCenter.x - this.touchCenter.x, nextCenter.y - this.touchCenter.y);
+                        this.scheduleInteractionRender(false);
+                    }
+                    this.touchMode = 'pinch';
+                    this.touchDistance = nextDistance;
+                    this.touchCenter = nextCenter;
+                    this.lastPointer = null;
+                } else if (this.touchMode === 'pan' && this.lastPointer) {
+                    const dx = event.clientX - this.lastPointer.x;
+                    const dy = event.clientY - this.lastPointer.y;
+                    this.dragDistance += Math.abs(dx) + Math.abs(dy);
+                    this.renderer.panBy(dx, dy);
+                    this.lastPointer = { x: event.clientX, y: event.clientY };
+                    this.scheduleInteractionRender(false);
+                }
+            }, { passive: false });
+
+            const finishPointerTouch = (event) => {
+                if (event.pointerType !== 'touch' || !this.activeTouchPointers.has(event.pointerId)) return;
+                event.preventDefault();
+                notePointerTouch();
+                this.activeTouchPointers.delete(event.pointerId);
+                if (this.activeTouchPointers.size === 1) {
+                    const remaining = pointerPoints()[0];
+                    this.touchMode = 'pan';
+                    this.lastPointer = { x: remaining.x, y: remaining.y };
+                    this.touchDistance = 0;
+                    this.touchCenter = null;
+                } else if (this.activeTouchPointers.size === 0) {
+                    this.touchMode = null;
+                    this.lastPointer = null;
+                    this.touchDistance = 0;
+                    this.touchCenter = null;
+                    this.dragDistance = 0;
+                }
+            };
+            this.renderer.canvas.addEventListener('pointerup', finishPointerTouch, { passive: false });
+            this.renderer.canvas.addEventListener('pointercancel', finishPointerTouch, { passive: false });
+
             this.renderer.canvas.addEventListener('mousedown', (event) => {
                 if (event.button !== 0) {
                     return;
@@ -525,6 +616,10 @@
             });
 
             this.renderer.canvas.addEventListener('touchstart', (event) => {
+                if (ignoreLegacyTouch()) {
+                    event.preventDefault();
+                    return;
+                }
                 if (event.touches.length === 1) {
                     const touch = event.touches[0];
                     this.touchMode = 'pan';
@@ -540,6 +635,10 @@
             }, { passive: false });
 
             this.renderer.canvas.addEventListener('touchmove', (event) => {
+                if (ignoreLegacyTouch()) {
+                    event.preventDefault();
+                    return;
+                }
                 if (this.touchMode === 'pan' && event.touches.length === 1 && this.lastPointer) {
                     const touch = event.touches[0];
                     const dx = touch.clientX - this.lastPointer.x;
@@ -567,6 +666,10 @@
             }, { passive: false });
 
             this.renderer.canvas.addEventListener('touchend', (event) => {
+                if (ignoreLegacyTouch()) {
+                    event.preventDefault();
+                    return;
+                }
                 if (this.touchMode === 'pan' && event.touches.length === 0 && this.lastPointer && this.dragDistance <= 10) {
                     const rect = this.renderer.canvas.getBoundingClientRect();
                     const worldPoint = this.renderer.screenToWorld(this.lastPointer.x - rect.left, this.lastPointer.y - rect.top);
@@ -586,12 +689,48 @@
             }, { passive: false });
 
             this.renderer.canvas.addEventListener('touchcancel', (event) => {
+                if (ignoreLegacyTouch()) {
+                    event.preventDefault();
+                    return;
+                }
                 this.touchMode = null;
                 this.touchDistance = 0;
                 this.touchCenter = null;
                 this.isDragging = false;
                 this.lastPointer = null;
                 this.dragDistance = 0;
+                event.preventDefault();
+            }, { passive: false });
+
+            // Safari and several desktop trackpads expose pinch/spread through
+            // GestureEvents instead of TouchEvents or wheel events.
+            this.renderer.canvas.addEventListener('gesturestart', (event) => {
+                this.touchMode = 'pinch';
+                this.gestureScale = Number.isFinite(event.scale) && event.scale > 0 ? event.scale : 1;
+                event.preventDefault();
+            }, { passive: false });
+
+            this.renderer.canvas.addEventListener('gesturechange', (event) => {
+                const nextScale = Number.isFinite(event.scale) && event.scale > 0 ? event.scale : this.gestureScale;
+                if (this.gestureScale > 0 && nextScale > 0) {
+                    const rect = this.renderer.canvas.getBoundingClientRect();
+                    const screenX = Number.isFinite(event.clientX) && event.clientX > 0
+                        ? event.clientX - rect.left
+                        : rect.width * 0.5;
+                    const screenY = Number.isFinite(event.clientY) && event.clientY > 0
+                        ? event.clientY - rect.top
+                        : rect.height * 0.5;
+                    const zoomFactor = clamp(nextScale / this.gestureScale, 0.85, 1.15);
+                    this.renderer.zoomAt(screenX, screenY, zoomFactor);
+                    this.scheduleInteractionRender(false);
+                }
+                this.gestureScale = nextScale;
+                event.preventDefault();
+            }, { passive: false });
+
+            this.renderer.canvas.addEventListener('gestureend', (event) => {
+                this.touchMode = null;
+                this.gestureScale = 1;
                 event.preventDefault();
             }, { passive: false });
         }

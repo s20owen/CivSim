@@ -318,7 +318,7 @@
             this.viewportHeight = height;
             this.baseScale = Math.min(width / WORLD_WIDTH, height / WORLD_HEIGHT);
             this.zoom = clamp(this.zoom, this.minZoom, this.maxZoom);
-            this.ensureStaticLayerCanvases();
+            this.ensureStaticLayerCanvases('terrain');
             this.clampCamera();
         }
 
@@ -1035,12 +1035,12 @@
             }
         }
 
-        ensureStaticLayerCanvases() {
-            if (!this.staticTerrainCanvas) {
+        ensureStaticLayerCanvases(layer = 'both') {
+            if ((layer === 'both' || layer === 'terrain') && !this.staticTerrainCanvas) {
                 this.staticTerrainCanvas = this.createStaticLayerCanvas(WORLD_WIDTH, WORLD_HEIGHT);
                 this.staticTerrainCtx = this.staticTerrainCanvas.getContext('2d');
             }
-            if (!this.staticPropCanvas) {
+            if ((layer === 'both' || layer === 'props') && !this.staticPropCanvas) {
                 this.staticPropCanvas = this.createStaticLayerCanvas(WORLD_WIDTH, WORLD_HEIGHT);
                 this.staticPropCtx = this.staticPropCanvas.getContext('2d');
             }
@@ -1070,13 +1070,18 @@
                 if (resource.depleted) {
                     continue;
                 }
-                parts.push(`${resource.type}:${Math.round(resource.x)}:${Math.round(resource.y)}:${Math.round(resource.amount || 0)}:${resource.frozen ? 1 : 0}`);
+                // Static resource art does not vary with the remaining fractional
+                // amount. Including it forced a full world-canvas upload whenever
+                // gathering crossed an integer, which becomes especially costly at
+                // accelerated simulation speeds. Spawn/depletion, type, position,
+                // and frozen-state changes still invalidate the layer.
+                parts.push(`${resource.type}:${Math.round(resource.x)}:${Math.round(resource.y)}:${resource.frozen ? 1 : 0}`);
             }
             return parts.join('|');
         }
 
         redrawStaticTerrainLayer() {
-            this.ensureStaticLayerCanvases();
+            this.ensureStaticLayerCanvases('terrain');
             const scale = this.performanceProfile.staticLayerScale || 1;
             this.staticTerrainCtx.setTransform(1, 0, 0, 1, 0, 0);
             this.staticTerrainCtx.clearRect(0, 0, this.staticTerrainCanvas.width, this.staticTerrainCanvas.height);
@@ -1105,7 +1110,7 @@
         }
 
         redrawStaticPropLayer() {
-            this.ensureStaticLayerCanvases();
+            this.ensureStaticLayerCanvases('props');
             const scale = this.performanceProfile.staticLayerScale || 1;
             this.staticPropCtx.setTransform(1, 0, 0, 1, 0, 0);
             this.staticPropCtx.clearRect(0, 0, this.staticPropCanvas.width, this.staticPropCanvas.height);
@@ -1147,15 +1152,16 @@
         }
 
         drawStaticPropLayer(ctx) {
-            const signature = this.buildStaticPropSignature();
-            if (this.staticPropSignature !== signature) {
-                this.redrawStaticPropLayer();
-                this.staticPropSignature = signature;
-            }
-            const prevSmoothing = ctx.imageSmoothingEnabled;
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(this.staticPropCanvas, 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-            ctx.imageSmoothingEnabled = prevSmoothing;
+            // Props change often as resources are gathered or depleted. Uploading a
+            // rebuilt world-sized canvas causes long GPU stalls, so draw only the
+            // visible non-tree resources directly. Trees remain depth-sorted below.
+            const bounds = this.getViewBounds();
+            this.drawStaticPropsInBounds(ctx, {
+                minX: bounds.left,
+                minY: bounds.top,
+                maxX: bounds.right,
+                maxY: bounds.bottom
+            });
         }
 
         drawLandUse(ctx) {
